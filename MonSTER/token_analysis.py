@@ -67,7 +67,7 @@ def find_embeddings(
 def print_embeddings(
     emb: torch.Tensor,
     puzzle_emb: torch.Tensor,
-    chunk: int = 32,
+    chunk: int = 16,
     num_random_puzzle: int = 12,
     seed: int = 0
 ) -> None:
