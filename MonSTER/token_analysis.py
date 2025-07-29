@@ -1,33 +1,27 @@
 #!/usr/bin/env python
 """
-token_analysis.py  —  inspect every token‑embedding matrix in an HRM checkpoint
+token_analysis.py  —  inspect every token‑embedding matrices in an HRM checkpoint
 ───────────────────────────────────────────────────────────────────────────────
 ARC‑HRM uses multiple vocabularies:
 
 • grid‑cell / colour tokens            → embed_tokens.embedding_weight
-• puzzle‑ID (task) tokens              → puzzle_emb.weight
+• puzzle‑ID (task) tokens              → puzzle_emb.weights
 • optional special or project‑specific → e.g. halt_emb.weight, pos_emb.weight
 
 This script loads the checkpoint on CPU, finds **every** 2‑D tensor that
-looks like an embedding table, and prints shape + a short guess at its role.
-
-Usage (from repo root):
-
-    uv run -m MonSTER.token_analysis \
-        checkpoints/HRM-checkpoint-ARC-2 [--ckpt-file checkpoint]
-
-The script makes no assumptions about file names beyond containing
-“emb”, “token”, or “weight”.  Adjust `NAME_RULES` if your codebase uses
-different conventions.
+looks like an embedding table, prints shape + a short guess at its role,
+and then dumps the actual values (rounded) for the 12 vocab tokens and
+12 random puzzle tokens, in rows of 64 dimensions each.
 """
 
 from __future__ import annotations
 
 import argparse
+import random
 import re
 import sys
 from pathlib import Path
-from typing import Dict, Tuple, List
+from typing import Dict, List, Tuple
 
 import torch
 
@@ -52,11 +46,10 @@ def classify(name: str) -> str:
 def load_state_dict(ckpt_path: Path) -> Dict[str, torch.Tensor]:
     obj = torch.load(ckpt_path, map_location="cpu")
     if isinstance(obj, dict):
-        # common wrappers
         for key in ("model", "state_dict", "module"):
             if key in obj and isinstance(obj[key], dict):
                 return obj[key]
-        return obj  # the checkpoint *is* the state‑dict
+        return obj
     raise RuntimeError("Unsupported checkpoint format (expected dict).")
 
 
@@ -70,9 +63,44 @@ def find_embeddings(
     return out
 
 
+def print_embeddings(
+    emb: torch.Tensor,
+    puzzle_emb: torch.Tensor,
+    chunk: int = 64,
+    num_random_puzzle: int = 12,
+    seed: int = 0
+) -> None:
+    """
+    Print each of the 12 vocab embeddings and `num_random_puzzle` random
+    puzzle embeddings, rounding to 3 decimal places and slicing into
+    lines of `chunk` dims each.
+    """
+    # build labels for the 12 grid tokens:
+    labels = {0: "PAD", 1: "EOS", **{i+2: f"Colour {i}" for i in range(10)}}
+    random.seed(seed)
+
+    print("\n=== Vocabulary embeddings (12 tokens) ===")
+    for idx, name in labels.items():
+        vec = emb[idx].cpu().tolist()
+        print(f"\nToken {idx:2d} → {name}")
+        for i in range(0, len(vec), chunk):
+            line = vec[i : i + chunk]
+            print(" ".join(f"{v:.3f}" for v in line))
+
+    print(f"\n=== {num_random_puzzle} Random puzzle embeddings ===")
+    max_id = puzzle_emb.shape[0]
+    picks = random.sample(range(max_id), num_random_puzzle)
+    for idx in picks:
+        vec = puzzle_emb[idx].cpu().tolist()
+        print(f"\nPuzzle token {idx}")
+        for i in range(0, len(vec), chunk):
+            line = vec[i : i + chunk]
+            print(" ".join(f"{v:.3f}" for v in line))
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(
-        description="List every token‑embedding matrix in an HRM checkpoint."
+        description="List and dump token‑embedding matrices in an HRM checkpoint."
     )
     ap.add_argument(
         "ckpt_dir", type=Path, help="Folder that contains the checkpoint file"
@@ -81,6 +109,11 @@ def main() -> None:
         "--ckpt-file",
         default="checkpoint",
         help="Checkpoint filename inside ckpt_dir (default: 'checkpoint')",
+    )
+    ap.add_argument(
+        "--dump",
+        action="store_true",
+        help="If set, print the rounded values for vocab + puzzle embeddings",
     )
     args = ap.parse_args()
 
@@ -94,6 +127,7 @@ def main() -> None:
     if not tables:
         sys.exit("❌  No embedding tensors found. Adjust the search heuristic.")
 
+    # summary table
     print("\n════════════════════════════════════════════════════════════════════")
     print(f"{'TABLE NAME':60} │ {'TOKENS':>7} × {'DIM':<4} │ ROLE")
     print("════════════════════════════════════════════════════════════════════")
@@ -104,6 +138,14 @@ def main() -> None:
     print("════════════════════════════════════════════════════════════════════")
     print(f"Found {len(tables)} embedding table(s).")
 
+    # if requested, dump actual values for grid + puzzle embeddings
+    if args.dump:
+        # locate the grid and puzzle tables
+        grid = next((w for n, w in tables if classify(n) == "Grid/colour tokens"), None)
+        puzzle = next((w for n, w in tables if classify(n) == "Puzzle‑ID tokens"), None)
+        if grid is None or puzzle is None:
+            sys.exit("❌  Could not find both grid/colour and puzzle‑ID embeddings.")
+        print_embeddings(grid, puzzle)
 
 if __name__ == "__main__":
     main()
