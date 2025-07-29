@@ -11,7 +11,8 @@ ARC‑HRM uses multiple vocabularies:
 This script loads the checkpoint on CPU, finds **every** 2‑D tensor that
 looks like an embedding table, prints shape + a short guess at its role,
 and then dumps the actual values (rounded) for the 12 vocab tokens and
-12 random puzzle tokens, in rows of 64 dimensions each.
+12 random puzzle tokens, in rows of 32 dimensions each, formatted with
+two decimal places and explicit +/– signs.
 """
 
 from __future__ import annotations
@@ -66,14 +67,14 @@ def find_embeddings(
 def print_embeddings(
     emb: torch.Tensor,
     puzzle_emb: torch.Tensor,
-    chunk: int = 64,
+    chunk: int = 32,
     num_random_puzzle: int = 12,
     seed: int = 0
 ) -> None:
     """
     Print each of the 12 vocab embeddings and `num_random_puzzle` random
-    puzzle embeddings, rounding to 3 decimal places and slicing into
-    lines of `chunk` dims each.
+    puzzle embeddings, rounding to 2 dp with explicit +/– signs and slicing
+    into lines of `chunk` dims each.
     """
     # build labels for the 12 grid tokens:
     labels = {0: "PAD", 1: "EOS", **{i+2: f"Colour {i}" for i in range(10)}}
@@ -85,7 +86,7 @@ def print_embeddings(
         print(f"\nToken {idx:2d} → {name}")
         for i in range(0, len(vec), chunk):
             line = vec[i : i + chunk]
-            print(" ".join(f"{v:.3f}" for v in line))
+            print(" ".join(f"{v:+.2f}" for v in line))
 
     print(f"\n=== {num_random_puzzle} Random puzzle embeddings ===")
     max_id = puzzle_emb.shape[0]
@@ -95,7 +96,7 @@ def print_embeddings(
         print(f"\nPuzzle token {idx}")
         for i in range(0, len(vec), chunk):
             line = vec[i : i + chunk]
-            print(" ".join(f"{v:.3f}" for v in line))
+            print(" ".join(f"{v:+.2f}" for v in line))
 
 
 def main() -> None:
@@ -113,7 +114,7 @@ def main() -> None:
     ap.add_argument(
         "--dump",
         action="store_true",
-        help="If set, print the rounded values for vocab + puzzle embeddings",
+        help="If set, print the formatted values for vocab + puzzle embeddings",
     )
     args = ap.parse_args()
 
@@ -140,12 +141,12 @@ def main() -> None:
 
     # if requested, dump actual values for grid + puzzle embeddings
     if args.dump:
-        # locate the grid and puzzle tables
         grid = next((w for n, w in tables if classify(n) == "Grid/colour tokens"), None)
         puzzle = next((w for n, w in tables if classify(n) == "Puzzle‑ID tokens"), None)
         if grid is None or puzzle is None:
             sys.exit("❌  Could not find both grid/colour and puzzle‑ID embeddings.")
         print_embeddings(grid, puzzle)
+
 
 if __name__ == "__main__":
     main()
