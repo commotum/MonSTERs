@@ -1,82 +1,108 @@
 #!/usr/bin/env python
-"""token_analysis.py
+"""
+token_analysis.py  —  inspect every token‑embedding matrix in an HRM checkpoint
+───────────────────────────────────────────────────────────────────────────────
+ARC‑HRM uses multiple vocabularies:
 
-Utility script to inspect a saved Hierarchical Reasoning Model (or any
-PyTorch checkpoint) and report the size of its token‑embedding table
-(number of tokens × embedding dimension).
+• grid‑cell / colour tokens            → embed_tokens.embedding_weight
+• puzzle‑ID (task) tokens              → puzzle_emb.weight
+• optional special or project‑specific → e.g. halt_emb.weight, pos_emb.weight
+
+This script loads the checkpoint on CPU, finds **every** 2‑D tensor that
+looks like an embedding table, and prints shape + a short guess at its role.
 
 Usage (from repo root):
-    python token_analysis.py checkpoints/HRM-checkpoint-ARC-2
 
-Optional flags:
-    --ckpt-file   Name of the checkpoint file inside the directory
-                  (default: "checkpoint").
+    uv run -m MonSTER.token_analysis \
+        checkpoints/HRM-checkpoint-ARC-2 [--ckpt-file checkpoint]
 
-The script is intentionally lightweight: it does **not** build the full
-model architecture.  It simply loads the checkpoint in CPU memory,
-searches the state‑dict for the first 2‑D tensor whose name contains
-"emb" (common for token embeddings), and prints its shape.
-
-If your project uses a different naming convention, adjust the
-`_is_embedding()` helper below.
+The script makes no assumptions about file names beyond containing
+“emb”, “token”, or “weight”.  Adjust `NAME_RULES` if your codebase uses
+different conventions.
 """
 
 from __future__ import annotations
 
 import argparse
-import os
+import re
+import sys
 from pathlib import Path
-from typing import Tuple
+from typing import Dict, Tuple, List
 
 import torch
 
+###############################################################################
+# Helper rules to label common HRM embedding tensors.
+###############################################################################
+NAME_RULES: List[Tuple[re.Pattern[str], str]] = [
+    (re.compile(r"puzzle[_.]?emb", re.I), "Puzzle‑ID tokens"),
+    (re.compile(r"embed_tokens|grid|colour", re.I), "Grid/colour tokens"),
+    (re.compile(r"halt[_.]?emb", re.I), "Halt‑flag tokens"),
+    (re.compile(r"pos[_.]?emb|position", re.I), "Positional embeddings"),
+]
 
-def _is_embedding(name: str, tensor: torch.Tensor) -> bool:
-    """Heuristic to decide whether a parameter is a token‑embedding table."""
-    return tensor.dim() == 2 and "emb" in name.lower()
+
+def classify(name: str) -> str:
+    for pat, label in NAME_RULES:
+        if pat.search(name):
+            return label
+    return "Unclassified‑embedding"
 
 
-def _find_embedding(state_dict: dict[str, torch.Tensor]) -> Tuple[str, torch.Tensor] | Tuple[None, None]:
-    """Return (param_name, weight) for the first embedding found, else (None, None)."""
-    for name, weight in state_dict.items():
-        if _is_embedding(name, weight):
-            return name, weight
-    return None, None
+def load_state_dict(ckpt_path: Path) -> Dict[str, torch.Tensor]:
+    obj = torch.load(ckpt_path, map_location="cpu")
+    if isinstance(obj, dict):
+        # common wrappers
+        for key in ("model", "state_dict", "module"):
+            if key in obj and isinstance(obj[key], dict):
+                return obj[key]
+        return obj  # the checkpoint *is* the state‑dict
+    raise RuntimeError("Unsupported checkpoint format (expected dict).")
+
+
+def find_embeddings(
+    state_dict: Dict[str, torch.Tensor]
+) -> List[Tuple[str, torch.Tensor]]:
+    out: List[Tuple[str, torch.Tensor]] = []
+    for name, tensor in state_dict.items():
+        if tensor.ndim == 2 and any(tag in name.lower() for tag in ("emb", "token")):
+            out.append((name, tensor))
+    return out
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Inspect token embedding dimensions in a checkpoint.")
-    parser.add_argument("ckpt_dir", type=Path, help="Directory that contains the checkpoint file (and all_config.yaml)")
-    parser.add_argument("--ckpt-file", default="checkpoint", help="Checkpoint filename inside ckpt_dir (default: 'checkpoint')")
-    args = parser.parse_args()
+    ap = argparse.ArgumentParser(
+        description="List every token‑embedding matrix in an HRM checkpoint."
+    )
+    ap.add_argument(
+        "ckpt_dir", type=Path, help="Folder that contains the checkpoint file"
+    )
+    ap.add_argument(
+        "--ckpt-file",
+        default="checkpoint",
+        help="Checkpoint filename inside ckpt_dir (default: 'checkpoint')",
+    )
+    args = ap.parse_args()
 
     ckpt_path = args.ckpt_dir / args.ckpt_file
     if not ckpt_path.exists():
-        raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
+        sys.exit(f"❌  Checkpoint file not found: {ckpt_path}")
 
-    print(f"Loading checkpoint → {ckpt_path} (CPU)…")
-    ckpt = torch.load(ckpt_path, map_location="cpu")
+    print(f"🔍  Loading checkpoint → {ckpt_path} (CPU)…", file=sys.stderr)
+    sd = load_state_dict(ckpt_path)
+    tables = find_embeddings(sd)
+    if not tables:
+        sys.exit("❌  No embedding tensors found. Adjust the search heuristic.")
 
-    # Determine the state‑dict.
-    if isinstance(ckpt, dict):
-        if "model" in ckpt and isinstance(ckpt["model"], dict):
-            state_dict = ckpt["model"]
-        elif "state_dict" in ckpt:
-            state_dict = ckpt["state_dict"]
-        else:  # fallback: maybe the whole object *is* the state‑dict
-            state_dict = ckpt  # type: ignore[assignment]
-    else:
-        raise RuntimeError("Unsupported checkpoint format – expected a dict with 'model' or 'state_dict'.")
-
-    name, emb_weight = _find_embedding(state_dict)
-    if emb_weight is None:
-        print("❌ No 2‑D embedding tensor found. Adjust `_is_embedding()` for your project’s naming scheme.")
-        return
-
-    vocab_size, emb_dim = emb_weight.shape
-    print("\n✅ Embedding tensor found →", name)
-    print(f"   Tokens (vocab size) : {vocab_size}")
-    print(f"   Embedding dimension : {emb_dim}\n")
+    print("\n════════════════════════════════════════════════════════════════════")
+    print(f"{'TABLE NAME':60} │ {'TOKENS':>7} × {'DIM':<4} │ ROLE")
+    print("════════════════════════════════════════════════════════════════════")
+    for name, w in tables:
+        n_tok, dim = w.shape
+        role = classify(name)
+        print(f"{name:60} │ {n_tok:7d} × {dim:<4d} │ {role}")
+    print("════════════════════════════════════════════════════════════════════")
+    print(f"Found {len(tables)} embedding table(s).")
 
 
 if __name__ == "__main__":
