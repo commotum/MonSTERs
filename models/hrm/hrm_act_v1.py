@@ -49,6 +49,9 @@ class HierarchicalReasoningModel_ACTV1Config(BaseModel):
 
     rms_norm_eps: float = 1e-5
     rope_theta: float = 10000.0
+
+    # Don't rotate the first k tokens if True
+    rope_skip_prefix: bool = False
     
     # Halting Q-learning config
     halt_max_steps: int
@@ -178,9 +181,23 @@ class HierarchicalReasoningModel_ACTV1_Inner(nn.Module):
         )
 
     def forward(self, carry: HierarchicalReasoningModel_ACTV1InnerCarry, batch: Dict[str, torch.Tensor]) -> Tuple[HierarchicalReasoningModel_ACTV1InnerCarry, torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        seq_info = dict(
-            cos_sin=self.rotary_emb() if hasattr(self, "rotary_emb") else None,
-        )
+        cos_sin = self.rotary_emb() if hasattr(self, "rotary_emb") else None
+        if (
+            cos_sin is not None
+            and self.config.pos_encodings == "rope"
+            and getattr(self.config, "rope_skip_prefix", False)
+            and self.puzzle_emb_len > 0
+        ):
+            cos, sin = cos_sin
+            cos = cos.clone()
+            sin = sin.clone()
+            k = int(self.puzzle_emb_len)  # number of prefix (puzzle-ID) tokens
+            cos[:k].fill_(1.0)  # identity rotation
+            sin[:k].zero_()
+            cos_sin = (cos, sin)
+
+        seq_info = dict(cos_sin=cos_sin)
+
 
         # Input encoding
         input_embeddings = self._input_embeddings(batch["inputs"], batch["puzzle_identifiers"])
