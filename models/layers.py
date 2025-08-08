@@ -170,7 +170,7 @@ def apply_monster_pos_emb(
         return q, k
 
     def b(x):
-        return x.unsqueeze(0).unsqueeze(2).unsqueeze(-1)
+        return x.unsqueeze(0).unsqueeze(2)
 
     ch_b, sh_b = b(ch), b(sh)
     cx_b, sx_b = b(cx), b(sx)
