@@ -288,6 +288,15 @@ class Attention(nn.Module):
         self.qkv_proj = CastedLinear(self.hidden_size, (self.num_heads + 2 * self.num_key_value_heads) * self.head_dim, bias=False)
         self.o_proj = CastedLinear(self.output_size, self.hidden_size, bias=False)
 
+        pattern12 = torch.tensor([1, -1, -1, -1] * 3, dtype=torch.float32)
+        main_dim = (self.head_dim // 12) * 12
+        mask = torch.ones(self.head_dim, dtype=torch.float32)
+        if main_dim > 0:
+            F = main_dim // 12
+            mask[:main_dim] = pattern12.repeat(F)
+        mask = mask.view(1, 1, 1, self.head_dim)
+        self.register_buffer("minkowski_mask", mask, persistent=False)
+
     def forward(self, cos_sin, hidden_states: torch.Tensor) -> torch.Tensor:
         batch_size, seq_len, _ = hidden_states.shape
 
@@ -307,6 +316,7 @@ class Attention(nn.Module):
                 query, key = apply_rotary_pos_emb(query, key, cos, sin)
             elif isinstance(cos_sin, dict) and cos_sin.get("kind") == "monster":
                 query, key = apply_monster_pos_emb(query, key, cos_sin, self.head_dim)
+                key = key * self.minkowski_mask.to(key.dtype)
 
         # flash attn
         attn_output = flash_attn_func(q=query, k=key, v=value, causal=self.causal)
