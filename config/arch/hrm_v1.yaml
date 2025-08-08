@@ -18,5 +18,6 @@ expansion: 4
 
 puzzle_emb_ndim: ${.hidden_size}
 
+# options: rope, learned, monster
 pos_encodings: rope
 skip_prefix: true

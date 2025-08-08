@@ -1,4 +1,4 @@
-from typing import Tuple, List, Dict, Optional
+from typing import Tuple, List, Dict, Optional, Literal
 from dataclasses import dataclass
 import math
 
@@ -45,7 +45,7 @@ class HierarchicalReasoningModel_ACTV1Config(BaseModel):
     hidden_size: int
     expansion: float
     num_heads: int
-    pos_encodings: str
+    pos_encodings: Literal["learned", "rope", "monster"]
 
     rms_norm_eps: float = 1e-5
     rope_theta: float = 10000.0
