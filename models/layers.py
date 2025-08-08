@@ -87,16 +87,18 @@ class MonsterEmbedding(nn.Module):
         j = torch.arange(self.num_freq, dtype=torch.float32, device=device)
         inv_freq = self.base ** (-j / self.num_freq)
 
-        t = torch.arange(self.max_pos, dtype=torch.float32, device=device)
+        pos = torch.arange(self.max_pos, dtype=torch.float32, device=device)
         if self.use_xy:
-            idx = torch.clamp(t - self.prefix_len, min=0)
+            idx = torch.clamp(pos - self.prefix_len, min=0)
             y = (idx // self.grid_w).to(torch.float32)
             x = (idx % self.grid_w).to(torch.float32)
-            z = torch.zeros_like(t)
+            z = torch.remainder(x, 2.0) + torch.remainder(y, 2.0)
         else:
-            x = torch.zeros_like(t)
-            y = torch.zeros_like(t)
-            z = torch.zeros_like(t)
+            x = torch.zeros_like(pos)
+            y = torch.zeros_like(pos)
+            z = torch.zeros_like(pos)
+
+        t = torch.zeros_like(pos)
 
         phi = (t * self.unit).unsqueeze(-1) * inv_freq
         thx = (x * self.unit).unsqueeze(-1) * inv_freq
