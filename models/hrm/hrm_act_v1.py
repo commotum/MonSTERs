@@ -8,7 +8,7 @@ from torch import nn
 from pydantic import BaseModel
 
 from models.common import trunc_normal_init_
-from models.layers import rms_norm, SwiGLU, Attention, RotaryEmbedding, CosSin, CastedEmbedding, CastedLinear
+from models.layers import rms_norm, SwiGLU, Attention, RotaryEmbedding, MonsterEmbedding, CastedEmbedding, CastedLinear
 from models.sparse_embedding import CastedSparseEmbedding
 
 
@@ -50,9 +50,15 @@ class HierarchicalReasoningModel_ACTV1Config(BaseModel):
     rms_norm_eps: float = 1e-5
     rope_theta: float = 10000.0
 
-    # Don't rotate the first k tokens if True
-    rope_skip_prefix: bool = False
-    
+    # MonSTER params
+    monster_theta: float = 10000.0
+    monster_top_delta: int = 1024
+    monster_use_xy: bool = False
+    monster_grid_w: int = 30
+
+    # Don't apply position encoding to first k tokens if True
+    skip_prefix: bool = False
+
     # Halting Q-learning config
     halt_max_steps: int
     halt_exploration_prob: float
@@ -77,7 +83,7 @@ class HierarchicalReasoningModel_ACTV1Block(nn.Module):
         )
         self.norm_eps = config.rms_norm_eps
 
-    def forward(self, cos_sin: CosSin, hidden_states: torch.Tensor) -> torch.Tensor:
+    def forward(self, cos_sin, hidden_states: torch.Tensor) -> torch.Tensor:
         # Post Norm
         # Self Attention
         hidden_states = rms_norm(hidden_states + self.self_attn(cos_sin=cos_sin, hidden_states=hidden_states), variance_epsilon=self.norm_eps)
@@ -124,11 +130,29 @@ class HierarchicalReasoningModel_ACTV1_Inner(nn.Module):
 
         # LM Blocks
         if self.config.pos_encodings == "rope":
-            self.rotary_emb = RotaryEmbedding(dim=self.config.hidden_size // self.config.num_heads,
-                                              max_position_embeddings=self.config.seq_len + self.puzzle_emb_len,
-                                              base=self.config.rope_theta)
+            self.rotary_emb = RotaryEmbedding(
+                dim=self.config.hidden_size // self.config.num_heads,
+                max_position_embeddings=self.config.seq_len + self.puzzle_emb_len,
+                base=self.config.rope_theta,
+            )
         elif self.config.pos_encodings == "learned":
-            self.embed_pos = CastedEmbedding(self.config.seq_len + self.puzzle_emb_len, self.config.hidden_size, init_std=embed_init_std, cast_to=self.forward_dtype)
+            self.embed_pos = CastedEmbedding(
+                self.config.seq_len + self.puzzle_emb_len,
+                self.config.hidden_size,
+                init_std=embed_init_std,
+                cast_to=self.forward_dtype,
+            )
+        elif self.config.pos_encodings == "monster":
+            self.monster_emb = MonsterEmbedding(
+                head_dim=self.config.hidden_size // self.config.num_heads,
+                max_position_embeddings=self.config.seq_len + self.puzzle_emb_len,
+                base=self.config.monster_theta,
+                top_delta=self.config.monster_top_delta,
+                skip_prefix=self.config.skip_prefix,
+                prefix_len=self.puzzle_emb_len,
+                use_xy=self.config.monster_use_xy,
+                grid_w=self.config.monster_grid_w,
+            )
         else:
             raise NotImplementedError()
 
@@ -181,22 +205,25 @@ class HierarchicalReasoningModel_ACTV1_Inner(nn.Module):
         )
 
     def forward(self, carry: HierarchicalReasoningModel_ACTV1InnerCarry, batch: Dict[str, torch.Tensor]) -> Tuple[HierarchicalReasoningModel_ACTV1InnerCarry, torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        cos_sin = self.rotary_emb() if hasattr(self, "rotary_emb") else None
-        if (
-            cos_sin is not None
-            and self.config.pos_encodings == "rope"
-            and getattr(self.config, "rope_skip_prefix", False)
-            and self.puzzle_emb_len > 0
-        ):
-            cos, sin = cos_sin
-            cos = cos.clone()
-            sin = sin.clone()
-            k = int(self.puzzle_emb_len)  # number of prefix (puzzle-ID) tokens
-            cos[:k].fill_(1.0)  # identity rotation
-            sin[:k].zero_()
-            cos_sin = (cos, sin)
+        pos_obj = None
+        if hasattr(self, "rotary_emb"):
+            pos_obj = self.rotary_emb()
+            if (
+                self.config.pos_encodings == "rope"
+                and self.config.skip_prefix
+                and self.puzzle_emb_len > 0
+            ):
+                cos, sin = pos_obj
+                cos = cos.clone()
+                sin = sin.clone()
+                k = int(self.puzzle_emb_len)
+                cos[:k].fill_(1.0)
+                sin[:k].zero_()
+                pos_obj = (cos, sin)
+        elif hasattr(self, "monster_emb"):
+            pos_obj = self.monster_emb()
 
-        seq_info = dict(cos_sin=cos_sin)
+        seq_info = dict(cos_sin=pos_obj)
 
 
         # Input encoding
