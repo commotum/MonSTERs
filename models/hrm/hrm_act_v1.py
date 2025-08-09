@@ -52,12 +52,12 @@ class HierarchicalReasoningModel_ACTV1Config(BaseModel):
 
     # MonSTER params
     monster_theta: float = 10000.0
-    monster_top_delta: int = 1024
-    monster_use_xy: bool = False
-    monster_grid_w: int = 30
+    monster_top_delta: int = 8
+    monster_use_xy: bool = True
+    monster_grid_w: int = 9
 
     # Don't apply position encoding to first k tokens if True
-    skip_prefix: bool = False
+    skip_prefix: bool = True
 
     # Halting Q-learning config
     halt_max_steps: int
