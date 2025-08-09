@@ -53,7 +53,7 @@ class MonsterEmbedding(nn.Module):
         head_dim: int,
         max_position_embeddings: int,
         base: float = 10000.0,
-        top_delta: int = 1024,
+        top_delta: int = 8,
         skip_prefix: bool = False,
         prefix_len: int = 0,
         use_xy: bool = False,
@@ -67,7 +67,7 @@ class MonsterEmbedding(nn.Module):
         self.num_freq = self.main_dim // 12
         self.max_pos = int(max_position_embeddings)
         self.base = float(base)
-        self.unit = 1.0 / float(top_delta)
+        self.unit = torch.pi / float(top_delta)
         self.skip_prefix = bool(skip_prefix)
         self.prefix_len = int(prefix_len)
         self.use_xy = bool(use_xy)
