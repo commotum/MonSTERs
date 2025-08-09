@@ -52,7 +52,7 @@ class HierarchicalReasoningModel_ACTV1Config(BaseModel):
 
     # MonSTER params
     monster_theta: float = 10000.0
-    monster_top_delta: int = 8
+    monster_top_delta: int = 9
     monster_use_xy: bool = True
     monster_grid_w: int = 9
 
@@ -60,7 +60,7 @@ class HierarchicalReasoningModel_ACTV1Config(BaseModel):
     skip_prefix: bool = True
 
     # Halting Q-learning config
-    halt_max_steps: int
+    halt_max_steps: int = 16
     halt_exploration_prob: float
 
     forward_dtype: str = "bfloat16"
