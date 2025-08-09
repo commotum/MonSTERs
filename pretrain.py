@@ -98,7 +98,7 @@ def create_dataloader(config: PretrainConfig, split: str, rank: int, world_size:
         batch_size=None,
 
         num_workers=1,
-        prefetch_factor=4,
+        prefetch_factor=8,
 
         pin_memory=True,
         persistent_workers=True
@@ -420,8 +420,7 @@ def launch(hydra_config: DictConfig):
             project=config.project_name,
             name=config.run_name,
             config=config.model_dump(),
-            settings=wandb.Settings(_disable_stats=True),
-            group="pos_encoders"  # optional: groups the three runs together
+            settings=wandb.Settings(_disable_stats=True)
         )  # type: ignore
 
         run_start_time = time.time()
@@ -447,39 +446,7 @@ def launch(hydra_config: DictConfig):
         metrics = evaluate(config, train_state, eval_loader, eval_metadata, rank=RANK, world_size=WORLD_SIZE)
 
         if RANK == 0 and metrics is not None:
-            # Pick an accuracy key from whatever sets your dataset exposes.
-            # We'll prefer "test" but fall back to any set that has an accuracy-like metric.
-            chosen_acc = None
-            for set_name, d in metrics.items():
-                for k in ("exact_accuracy", "accuracy", "acc"):
-                    if k in d:
-                        chosen_acc = float(d[k])
-                        break
-                if chosen_acc is not None:
-                    break
-
-            # Add wall-clock time (minutes) and a normalized accuracy key for easy comparisons.
-            flat = {}
-            if 'run_start_time' in locals():
-                flat["time/min"] = (time.time() - run_start_time) / 60.0
-            if chosen_acc is not None:
-                flat["eval/exact_accuracy"] = chosen_acc
-
-            # (Optional) quick GPU mem peek
-            if torch.cuda.is_available():
-                flat["sys/gpu_mem_gb"] = torch.cuda.max_memory_allocated() / 1e9
-
-            # Merge and log
-            payload = dict(metrics)
-            payload.update(flat)
-            wandb.log(payload, step=train_state.step)
-
-            # First time we hit 95%, store summaries so you can sort/filter in the W&B table.
-            if chosen_acc is not None and chosen_acc >= 0.95 and "time_to_95_min" not in wandb.run.summary:
-                if "time/min" in flat:
-                    wandb.run.summary["time_to_95_min"] = flat["time/min"]
-                wandb.run.summary["time_to_95_step"] = train_state.step
-
+            wandb.log(metrics, step=train_state.step)
             
         ############ Checkpointing
         if RANK == 0 and (config.checkpoint_every_eval or (_iter_id == total_iters - 1)):
