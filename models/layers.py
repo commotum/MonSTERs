@@ -53,10 +53,10 @@ class MonsterEmbedding(nn.Module):
         head_dim: int,
         max_position_embeddings: int,
         base: float = 10000.0,
-        top_delta: int = 8,
-        skip_prefix: bool = False,
+        top_delta: int = 9,
+        skip_prefix: bool = True,
         prefix_len: int = 0,
-        use_xy: bool = False,
+        use_xy: bool = True,
         grid_w: int = 9,
         device=None,
     ):
