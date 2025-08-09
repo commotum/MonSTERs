@@ -57,7 +57,7 @@ class MonsterEmbedding(nn.Module):
         skip_prefix: bool = False,
         prefix_len: int = 0,
         use_xy: bool = False,
-        grid_w: int = 30,
+        grid_w: int = 9,
         device=None,
     ):
         super().__init__()
