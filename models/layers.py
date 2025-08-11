@@ -92,7 +92,8 @@ class MonsterEmbedding(nn.Module):
             idx = torch.clamp(pos - self.prefix_len, min=0)
             y = (idx // self.grid_w).to(torch.float32)
             x = (idx % self.grid_w).to(torch.float32)
-            z = torch.remainder(x, 2.0) + torch.remainder(y, 2.0)
+            sub_grid = int(self.grid_w ** 0.5)
+            z = torch.floor(x / sub_grid) + torch.floor(y / sub_grid) * sub_grid
         else:
             x = torch.zeros_like(pos)
             y = torch.zeros_like(pos)
