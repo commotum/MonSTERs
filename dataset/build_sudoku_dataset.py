@@ -72,12 +72,21 @@ def convert_subset(set_name: str, config: DataProcessConfig):
                 inputs.append(np.frombuffer(q.replace('.', '0').encode(), dtype=np.uint8).reshape(9, 9) - ord('0'))
                 labels.append(np.frombuffer(a.encode(), dtype=np.uint8).reshape(9, 9) - ord('0'))
 
-    # If subsample_size is specified for the training set,
-    # randomly sample the desired number of examples.
-    if set_name == "train" and config.subsample_size is not None:
+    # If subsample_size is specified, randomly sample the desired number of examples.
+    if config.subsample_size is not None:
         total_samples = len(inputs)
-        if config.subsample_size < total_samples:
-            indices = np.random.choice(total_samples, size=config.subsample_size, replace=False)
+        
+        # Determine the sample size for the current set
+        sample_size = 0
+        if set_name == "train":
+            sample_size = config.subsample_size
+        elif set_name == "test":
+            # Maintain a rough 10:1 train/test ratio for the subsample
+            sample_size = config.subsample_size // 10
+
+        if sample_size > 0 and sample_size < total_samples:
+            print(f"Subsampling {set_name} set from {total_samples} to {sample_size} examples.")
+            indices = np.random.choice(total_samples, size=sample_size, replace=False)
             inputs = [inputs[i] for i in indices]
             labels = [labels[i] for i in indices]
 
