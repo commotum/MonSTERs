@@ -17,29 +17,13 @@
     "Train":    {"blank_identifier_id": 0, "ignore_label_id": 0, "mean_puzzle_examples": 1.0 , "num_puzzle_identifiers": 1      , "pad_id": 0, "seq_len": 900, "sets": ["all"], "total_groups": 1000   , "vocab_size": 6 },
     "Test":     {"blank_identifier_id": 0, "ignore_label_id": 0, "mean_puzzle_examples": 1.0 , "num_puzzle_identifiers": 1      , "pad_id": 0, "seq_len": 900, "sets": ["all"], "total_groups": 1000   , "vocab_size": 6 }},
 
- {  "Dataset":  "sudoku-extreme-10k-aug-1000",
-    "Train":    {"blank_identifier_id": 0, "ignore_label_id": 0, "mean_puzzle_examples": 1.0 , "num_puzzle_identifiers": 1      , "pad_id": 0, "seq_len": 81 , "sets": ["all"], "total_groups": 10000  , "vocab_size": 11},
-    "Test":     {"blank_identifier_id": 0, "ignore_label_id": 0, "mean_puzzle_examples": 1.0 , "num_puzzle_identifiers": 1      , "pad_id": 0, "seq_len": 81 , "sets": ["all"], "total_groups": 422786 , "vocab_size": 11}},
-
- {  "Dataset":  "sudoku-extreme-15k-aug-1000",
-    "Train":    {"blank_identifier_id": 0, "ignore_label_id": 0, "mean_puzzle_examples": 1.0 , "num_puzzle_identifiers": 1      , "pad_id": 0, "seq_len": 81 , "sets": ["all"], "total_groups": 15000  , "vocab_size": 11},
-    "Test":     {"blank_identifier_id": 0, "ignore_label_id": 0, "mean_puzzle_examples": 1.0 , "num_puzzle_identifiers": 1      , "pad_id": 0, "seq_len": 81 , "sets": ["all"], "total_groups": 422786 , "vocab_size": 11}},
-
  {  "Dataset":  "sudoku-extreme-1k-aug-1000",
     "Train":    {"blank_identifier_id": 0, "ignore_label_id": 0, "mean_puzzle_examples": 1.0 , "num_puzzle_identifiers": 1      , "pad_id": 0, "seq_len": 81 , "sets": ["all"], "total_groups": 1000   , "vocab_size": 11},
-    "Test":     {"blank_identifier_id": 0, "ignore_label_id": 0, "mean_puzzle_examples": 1.0 , "num_puzzle_identifiers": 1      , "pad_id": 0, "seq_len": 81 , "sets": ["all"], "total_groups": 422786 , "vocab_size": 11}},
-
- {  "Dataset":  "sudoku-extreme-20k-aug-1000",
-    "Train":    {"blank_identifier_id": 0, "ignore_label_id": 0, "mean_puzzle_examples": 1.0 , "num_puzzle_identifiers": 1      , "pad_id": 0, "seq_len": 81 , "sets": ["all"], "total_groups": 20000  , "vocab_size": 11},
-    "Test":     {"blank_identifier_id": 0, "ignore_label_id": 0, "mean_puzzle_examples": 1.0 , "num_puzzle_identifiers": 1      , "pad_id": 0, "seq_len": 81 , "sets": ["all"], "total_groups": 422786 , "vocab_size": 11}},
-
- {  "Dataset":  "sudoku-extreme-25k-aug-1000",
-    "Train":    {"blank_identifier_id": 0, "ignore_label_id": 0, "mean_puzzle_examples": 1.0 , "num_puzzle_identifiers": 1      , "pad_id": 0, "seq_len": 81 , "sets": ["all"], "total_groups": 25000  , "vocab_size": 11},
-    "Test":     {"blank_identifier_id": 0, "ignore_label_id": 0, "mean_puzzle_examples": 1.0 , "num_puzzle_identifiers": 1      , "pad_id": 0, "seq_len": 81 , "sets": ["all"], "total_groups": 422786 , "vocab_size": 11}},
+    "Test":     {"blank_identifier_id": 0, "ignore_label_id": 0, "mean_puzzle_examples": 1.0 , "num_puzzle_identifiers": 1      , "pad_id": 0, "seq_len": 81 , "sets": ["all"], "total_groups": 100    , "vocab_size": 11}},
 
  {  "Dataset":  "sudoku-extreme-5k-aug-1000",
     "Train":    {"blank_identifier_id": 0, "ignore_label_id": 0, "mean_puzzle_examples": 1.0 , "num_puzzle_identifiers": 1      , "pad_id": 0, "seq_len": 81 , "sets": ["all"], "total_groups": 5000   , "vocab_size": 11},
-    "Test":     {"blank_identifier_id": 0, "ignore_label_id": 0, "mean_puzzle_examples": 1.0 , "num_puzzle_identifiers": 1      , "pad_id": 0, "seq_len": 81 , "sets": ["all"], "total_groups": 422786 , "vocab_size": 11}},
+    "Test":     {"blank_identifier_id": 0, "ignore_label_id": 0, "mean_puzzle_examples": 1.0 , "num_puzzle_identifiers": 1      , "pad_id": 0, "seq_len": 81 , "sets": ["all"], "total_groups": 500    , "vocab_size": 11}},
 
  {  "Dataset":  "sudoku-extreme-full",
     "Train":    {"blank_identifier_id": 0, "ignore_label_id": 0, "mean_puzzle_examples": 1.0 , "num_puzzle_identifiers": 1      , "pad_id": 0, "seq_len": 81 , "sets": ["all"], "total_groups": 3831994, "vocab_size": 11},
