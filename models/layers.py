@@ -67,7 +67,7 @@ class MonsterEmbedding(nn.Module):
         self.num_freq = self.main_dim // 12
         self.max_pos = int(max_position_embeddings)
         self.base = float(base)
-        self.unit = torch.pi / float(top_delta)
+        self.unit = 1 # torch.pi / float(top_delta)
         self.skip_prefix = bool(skip_prefix)
         self.prefix_len = int(prefix_len)
         self.use_xy = bool(use_xy)
@@ -92,8 +92,10 @@ class MonsterEmbedding(nn.Module):
             idx = torch.clamp(pos - self.prefix_len, min=0)
             y = (idx // self.grid_w).to(torch.float32)
             x = (idx % self.grid_w).to(torch.float32)
-            sub_grid = int(self.grid_w ** 0.5)
-            z = torch.floor(x / sub_grid) + torch.floor(y / sub_grid) * sub_grid
+            z = torch.remainder(x, 2.0) + torch.remainder(y, 2.0)
+            # sub_grid = int(self.grid_w ** 0.5)
+            # z = torch.floor(x / sub_grid) + torch.floor(y / sub_grid) * sub_grid
+        
         else:
             x = torch.zeros_like(pos)
             y = torch.zeros_like(pos)
