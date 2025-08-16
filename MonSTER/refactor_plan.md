@@ -118,3 +118,20 @@ This document outlines a step-by-step plan to refactor the repository from its c
     2.  **Verify Caching:** Check that the new encoder modules still correctly pre-compute their lookup tables and register them as `nn.Buffer`s, avoiding re-computation on every forward pass.
     3.  **Run Unit Tests:** Create and run tests for the new `BasePositionalEncoder` subclasses to ensure their mathematical correctness.
   * **Dependencies & Rationale:** Guarantees that the refactor not only works correctly but has also preserved the high-performance characteristics of the original system.
+
+
+
+
+
+
+
+
+Dataset Builders COMPLETELY Separate from Positional Encodings Module
+    - Puzzle Positions (Given By Dimensions/Shape of Array, Sudoku would be 9x9)
+    - Encoder Num Dimensions (Int. For example standard RoPE would be 1, 2D RoPE would be 2)
+    - Encoder Method (RoPE, Learned, MonSTER, determines base coordinates used for mapping)
+    - Map from Positions to Coordinates (Which puzzle positions are mapped to which dimensions in the Endoder coordinate space)
+
+Dataset Builders give Coordinate Value pairs to Pos-Encoders which:
+    - Calculate extremities of data
+    - Create cache's for rotor positions
