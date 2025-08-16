@@ -67,7 +67,7 @@ class MonsterEmbedding(nn.Module):
         self.num_freq = self.main_dim // 12
         self.max_pos = int(max_position_embeddings)
         self.base = float(base)
-        self.unit = 1 # torch.pi / float(top_delta)
+        self.unit = torch.pi # / float(top_delta)
         self.skip_prefix = bool(skip_prefix)
         self.prefix_len = int(prefix_len)
         self.use_xy = bool(use_xy)
