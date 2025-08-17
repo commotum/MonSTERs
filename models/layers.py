@@ -53,11 +53,11 @@ class MonsterEmbedding(nn.Module):
         head_dim: int,
         max_position_embeddings: int,
         base: float = 10000.0,
-        top_delta: int = 9,
+        top_delta: int = 30,
         skip_prefix: bool = True,
         prefix_len: int = 0,
         use_xy: bool = True,
-        grid_w: int = 9,
+        grid_w: int = 30,
         device=None,
     ):
         super().__init__()
@@ -67,7 +67,7 @@ class MonsterEmbedding(nn.Module):
         self.num_freq = self.main_dim // 12
         self.max_pos = int(max_position_embeddings)
         self.base = float(base)
-        self.unit = torch.pi # / float(top_delta)
+        self.unit = (2 * torch.pi) / float(top_delta)
         self.skip_prefix = bool(skip_prefix)
         self.prefix_len = int(prefix_len)
         self.use_xy = bool(use_xy)
@@ -87,14 +87,47 @@ class MonsterEmbedding(nn.Module):
         j = torch.arange(self.num_freq, dtype=torch.float32, device=device)
         inv_freq = self.base ** (-j / self.num_freq)
 
+###
+        pos = torch.arange(self.max_pos, dtype=torch.float32, device=device)
+        if self.use_xy:
+            idx = torch.clamp(pos - self.prefix_len, min=0)
+
+            W = self.grid_w
+            # Height that covers all positions (rounded up to full rows)
+            H = int(_find_multiple(self.max_pos - self.prefix_len, W) // W)
+
+            # Integer grid indices (row-major): x in [0..W-1], y in [0..H-1]
+            y_idx = (idx // W)
+            x_idx = (idx %  W)
+
+            # Center cell centers at (0,0); make +y point "up" (top row positive)
+            half_w = (W - 1) / 2.0
+            half_h = (H - 1) / 2.0
+            x = x_idx.to(torch.float32) - half_w       # e.g., 0..29 -> -14.5..+14.5
+            y = half_h - y_idx.to(torch.float32)       # top row -> +14.5, bottom -> -14.5
+
+            # Checkerboard from integer indices (don’t use centered floats for parity)
+            z = 0.5 - torch.remainder(x_idx + y_idx, 2).to(torch.float32)
+
+
+        else:
+            x = torch.zeros_like(pos)
+            y = torch.zeros_like(pos)
+            z = torch.zeros_like(pos)
+
+        t = torch.zeros_like(pos)
+
+###
+        """
         pos = torch.arange(self.max_pos, dtype=torch.float32, device=device)
         if self.use_xy:
             idx = torch.clamp(pos - self.prefix_len, min=0)
             y = (idx // self.grid_w).to(torch.float32)
             x = (idx % self.grid_w).to(torch.float32)
-            z = torch.remainder(x, 2.0) + torch.remainder(y, 2.0)
-            # sub_grid = int(self.grid_w ** 0.5)
-            # z = torch.floor(x / sub_grid) + torch.floor(y / sub_grid) * sub_grid
+            z = torch.remainder(x + y, 2.0)  # Checkerboard, For ARC-AGI
+            # z = torch.remainder(x, 2.0) + torch.remainder(y, 2.0) # For Sudoku (Worked)
+            # sub_grid = int(self.grid_w ** 0.5) 
+            # z = torch.floor(x / sub_grid) + torch.floor(y / sub_grid) * sub_grid # For Sudoku (Didn't work)
         
         else:
             x = torch.zeros_like(pos)
@@ -102,6 +135,8 @@ class MonsterEmbedding(nn.Module):
             z = torch.zeros_like(pos)
 
         t = torch.zeros_like(pos)
+        """
+###
 
         phi = (t * self.unit).unsqueeze(-1) * inv_freq
         thx = (x * self.unit).unsqueeze(-1) * inv_freq
