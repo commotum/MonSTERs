@@ -106,8 +106,10 @@ class MonsterEmbedding(nn.Module):
             x = x_idx.to(torch.float32) - half_w       # e.g., 0..29 -> -14.5..+14.5
             y = half_h - y_idx.to(torch.float32)       # top row -> +14.5, bottom -> -14.5
 
+            z = torch.remainder(x, 2.0) + torch.remainder(y, 2.0) # worked for sudoku, maybe it'll work here as well?
+
             # Checkerboard from integer indices (don’t use centered floats for parity)
-            z = 0.5 - torch.remainder(x_idx + y_idx, 2).to(torch.float32)
+            # z = 0.5 - torch.remainder(x_idx + y_idx, 2).to(torch.float32)
 
 
         else:
