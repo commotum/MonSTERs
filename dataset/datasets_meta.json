@@ -2,12 +2,16 @@
     "run_command": "uv run python dataset/get_meta.py"},
 
  {  "Dataset":  "arc-2-aug-1000",
-    "Train":    {"blank_identifier_id": 0, "ignore_label_id": 0, "mean_puzzle_examples": 4.15, "num_puzzle_identifiers": 1921238, "pad_id": 0, "seq_len": 900, "sets": ["all"], "total_groups": 2080   , "vocab_size": 12},
-    "Test":     {"blank_identifier_id": 0, "ignore_label_id": 0, "mean_puzzle_examples": 1.13, "num_puzzle_identifiers": 1921238, "pad_id": 0, "seq_len": 900, "sets": ["all"], "total_groups": 520    , "vocab_size": 12}},
+    "Train":    {"blank_identifier_id": 0, "ignore_label_id": 0, "mean_puzzle_examples": 4.15, "num_puzzle_identifiers": 1045840, "pad_id": 0, "seq_len": 900, "sets": ["all"], "total_groups": 1120   , "vocab_size": 12},
+    "Test":     {"blank_identifier_id": 0, "ignore_label_id": 0, "mean_puzzle_examples": 1.39, "num_puzzle_identifiers": 1045840, "pad_id": 0, "seq_len": 900, "sets": ["all"], "total_groups": 120    , "vocab_size": 12}},
 
- {  "Dataset":  "arc-aug-1000",
-    "Train":    {"blank_identifier_id": 0, "ignore_label_id": 0, "mean_puzzle_examples": 4.15, "num_puzzle_identifiers": 876405 , "pad_id": 0, "seq_len": 900, "sets": ["all"], "total_groups": 960    , "vocab_size": 12},
-    "Test":     {"blank_identifier_id": 0, "ignore_label_id": 0, "mean_puzzle_examples": 1.05, "num_puzzle_identifiers": 876405 , "pad_id": 0, "seq_len": 900, "sets": ["all"], "total_groups": 400    , "vocab_size": 12}},
+ {  "Dataset":  "arc-all-aug-1000",
+    "Train":    {"blank_identifier_id": 0, "ignore_label_id": 0, "mean_puzzle_examples": 4.35, "num_puzzle_identifiers": 1213482, "pad_id": 0, "seq_len": 900, "sets": ["all"], "total_groups": 1305   , "vocab_size": 12},
+    "Test":     {"blank_identifier_id": 0, "ignore_label_id": 0, "mean_puzzle_examples": 1.39, "num_puzzle_identifiers": 1213482, "pad_id": 0, "seq_len": 900, "sets": ["all"], "total_groups": 120    , "vocab_size": 12}},
+
+ {  "Dataset":  "arc-all-aug-256",
+    "Train":    {"blank_identifier_id": 0, "ignore_label_id": 0, "mean_puzzle_examples": 4.36, "num_puzzle_identifiers": 329399 , "pad_id": 0, "seq_len": 900, "sets": ["all"], "total_groups": 1305   , "vocab_size": 12},
+    "Test":     {"blank_identifier_id": 0, "ignore_label_id": 0, "mean_puzzle_examples": 1.39, "num_puzzle_identifiers": 329399 , "pad_id": 0, "seq_len": 900, "sets": ["all"], "total_groups": 120    , "vocab_size": 12}},
 
  {  "Dataset":  "arc-mini-aug-100",
     "Train":    {"blank_identifier_id": 0, "ignore_label_id": 0, "mean_puzzle_examples": 4.04, "num_puzzle_identifiers": 115996 , "pad_id": 0, "seq_len": 900, "sets": ["all"], "total_groups": 1160   , "vocab_size": 12},
@@ -20,6 +24,10 @@
  {  "Dataset":  "sudoku-extreme-1k-aug-1000",
     "Train":    {"blank_identifier_id": 0, "ignore_label_id": 0, "mean_puzzle_examples": 1.0 , "num_puzzle_identifiers": 1      , "pad_id": 0, "seq_len": 81 , "sets": ["all"], "total_groups": 1000   , "vocab_size": 11},
     "Test":     {"blank_identifier_id": 0, "ignore_label_id": 0, "mean_puzzle_examples": 1.0 , "num_puzzle_identifiers": 1      , "pad_id": 0, "seq_len": 81 , "sets": ["all"], "total_groups": 100    , "vocab_size": 11}},
+
+ {  "Dataset":  "sudoku-extreme-25k-aug-1000",
+    "Train":    {"blank_identifier_id": 0, "ignore_label_id": 0, "mean_puzzle_examples": 1.0 , "num_puzzle_identifiers": 1      , "pad_id": 0, "seq_len": 81 , "sets": ["all"], "total_groups": 25000  , "vocab_size": 11},
+    "Test":     {"blank_identifier_id": 0, "ignore_label_id": 0, "mean_puzzle_examples": 1.0 , "num_puzzle_identifiers": 1      , "pad_id": 0, "seq_len": 81 , "sets": ["all"], "total_groups": 2500   , "vocab_size": 11}},
 
  {  "Dataset":  "sudoku-extreme-5k-aug-1000",
     "Train":    {"blank_identifier_id": 0, "ignore_label_id": 0, "mean_puzzle_examples": 1.0 , "num_puzzle_identifiers": 1      , "pad_id": 0, "seq_len": 81 , "sets": ["all"], "total_groups": 5000   , "vocab_size": 11},
