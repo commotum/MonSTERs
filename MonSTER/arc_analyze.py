@@ -82,6 +82,11 @@ class TaskSummary:
     Hb4sq: int
     b_area4sq: int
     overhead4sq: float
+    # NEW: per-task uniformity info
+    inputs_unique: int
+    outputs_unique: int
+    inputs_uniform: bool
+    outputs_uniform: bool
 
 
 def grid_dims(grid: List[List[int]]) -> Tuple[int, int]:
@@ -106,20 +111,7 @@ def pair_max_dims(example: Dict) -> Tuple[int, int]:
     return (maxW, maxH)
 
 
-def task_canvas(task: Dict, cap: Optional[int]) -> Tuple[int, int]:
-    """Compute the max canvas (W, H) for a task across all train+test pairs."""
-    Ws, Hs = [], []
-    for sect in ("train", "test"):
-        for ex in task.get(sect, []) or []:
-            w, h = pair_max_dims(ex)
-            Ws.append(w)
-            Hs.append(h)
-    W = max(Ws, default=0)
-    H = max(Hs, default=0)
-    if cap is not None:
-        W = min(W, cap)
-        H = min(H, cap)
-    return (W, H)
+
 
 
 def parse_targets(s: Optional[str], default: List[int]) -> List[int]:
@@ -238,61 +230,109 @@ def summarize_tasks(
     W_T: List[int],
     H_T: List[int],
     canonicalize: bool,
-) -> Tuple[List[TaskSummary], Counter, Counter, Counter, Counter]:
+) -> Tuple[List[TaskSummary], Counter, Counter, Counter, Counter, Dict[str, int]]:
     records: List[TaskSummary] = []
     bucket_counts: Counter = Counter()
     bucket_counts4: Counter = Counter()
     bucket_counts8: Counter = Counter()
     bucket_counts4sq: Counter = Counter()
 
+    # NEW: global counters
+    pair_equal = 0         # pairs where input size == output size
+    pair_total = 0         # only counting pairs that HAVE both input and output
+    tasks_inputs_uniform = 0
+    tasks_outputs_uniform = 0
+    tasks_both_uniform = 0
+    tasks_uniform_and_same_dims = 0
+
     for path in iter_task_paths(root):
         task = load_task(path)
         if task is None:
             continue
-        W, H = task_canvas(task, cap)
+
+        # Gather per-pair sizes and per-task sets of input/output sizes
+        in_sizes = set()   # {(W,H), ...} across all train+test inputs in this task
+        out_sizes = set()  # {(W,H), ...} across all train+test outputs in this task
+        pair_max_Ws, pair_max_Hs = [], []
+
+        for sect in ("train", "test"):
+            for ex in task.get(sect, []) or []:
+                # input
+                if "input" in ex:
+                    iw, ih = grid_dims(ex["input"])
+                    in_sizes.add((iw, ih))
+                else:
+                    iw, ih = (0, 0)
+
+                # output (may be missing in test)
+                if "output" in ex:
+                    ow, oh = grid_dims(ex["output"])
+                    out_sizes.add((ow, oh))
+                    # pair counter considers only pairs that have BOTH sides
+                    pair_total += 1
+                    if (iw, ih) == (ow, oh):
+                        pair_equal += 1
+                # per-pair maxima for task canvas
+                pw, ph = pair_max_dims(ex)
+                pair_max_Ws.append(pw)
+                pair_max_Hs.append(ph)
+
+        # Task canvas (cap only affects bucketing, not the uniformity checks)
+        W = max(pair_max_Ws, default=0)
+        H = max(pair_max_Hs, default=0)
+        if cap is not None:
+            W = min(W, cap)
+            H = min(H, cap)
+
+        # Per-task uniformity flags
+        in_unique = len(in_sizes)
+        out_unique = len(out_sizes)
+        in_uniform = (in_unique == 1)   # False if there were zero inputs (unlikely)
+        out_uniform = (out_unique == 1) # False if there were zero outputs (possible if test-only)
+        if in_uniform:
+            tasks_inputs_uniform += 1
+        if out_uniform:
+            tasks_outputs_uniform += 1
+        if in_uniform and out_uniform:
+            tasks_both_uniform += 1
+            # same dims if both uniform AND the single sizes match
+            if next(iter(in_sizes)) == next(iter(out_sizes)):
+                tasks_uniform_and_same_dims += 1
+
+        # Buckets
         Wb, Hb, rotated = assign_bucket(W, H, W_T, H_T, canonicalize)
-        Wb4, Hb4, rotated4 = assign_multiples4_bucket(W, H, canonicalize)
-        Wb8, Hb8, rotated8 = assign_square_multiples8_bucket(W, H)
-        Wb4sq, Hb4sq, rotated4sq = assign_square_multiples4_bucket(W, H)
-        
+        Wb4, Hb4, _ = assign_multiples4_bucket(W, H, canonicalize)
+        Wb8, Hb8, _ = assign_square_multiples8_bucket(W, H)
+        Wb4sq, Hb4sq, _ = assign_square_multiples4_bucket(W, H)
+
         area = max(1, W * H)
         b_area = max(1, Wb * Hb)
         b_area4 = max(1, Wb4 * Hb4)
         b_area8 = max(1, Wb8 * Hb8)
         b_area4sq = max(1, Wb4sq * Hb4sq)
-        
+
         overhead = b_area / area
         overhead4 = b_area4 / area
         overhead8 = b_area8 / area
         overhead4sq = b_area4sq / area
-        
+
         cap_area = (cap * cap) if cap else None
         fill_deficit = 1.0 - (area / cap_area) if cap_area else float('nan')
-        
+
         rec = TaskSummary(
             task_id=path.stem,
             path=path,
-            W=W,
-            H=H,
-            Wb=Wb,
-            Hb=Hb,
-            rotated=rotated,
-            area=area,
-            b_area=b_area,
-            overhead=overhead,
-            fill_deficit=fill_deficit,
-            Wb4=Wb4,
-            Hb4=Hb4,
-            b_area4=b_area4,
-            overhead4=overhead4,
-            Wb8=Wb8,
-            Hb8=Hb8,
-            b_area8=b_area8,
-            overhead8=overhead8,
-            Wb4sq=Wb4sq,
-            Hb4sq=Hb4sq,
-            b_area4sq=b_area4sq,
-            overhead4sq=overhead4sq,
+            W=W, H=H,
+            Wb=Wb, Hb=Hb, rotated=rotated,
+            area=area, b_area=b_area, overhead=overhead, fill_deficit=fill_deficit,
+            Wb4=Wb4, Hb4=Hb4, b_area4=b_area4, overhead4=overhead4,
+            Wb8=Wb8, Hb8=Hb8, b_area8=b_area8, overhead8=overhead8,
+            Wb4sq=Wb4sq, Hb4sq=Hb4sq, b_area4sq=b_area4sq, overhead4sq=overhead4sq,
+            # NEW:
+            inputs_unique=in_unique,
+            outputs_unique=out_unique,
+            inputs_uniform=in_uniform,
+            outputs_uniform=out_uniform,
         )
         records.append(rec)
         bucket_counts[(Wb, Hb)] += 1
@@ -300,7 +340,16 @@ def summarize_tasks(
         bucket_counts8[(Wb8, Hb8)] += 1
         bucket_counts4sq[(Wb4sq, Hb4sq)] += 1
 
-    return records, bucket_counts, bucket_counts4, bucket_counts8, bucket_counts4sq
+    stats = {
+        "pair_equal": pair_equal,
+        "pair_total": pair_total,
+        "tasks_inputs_uniform": tasks_inputs_uniform,
+        "tasks_outputs_uniform": tasks_outputs_uniform,
+        "tasks_both_uniform": tasks_both_uniform,
+        "tasks_uniform_and_same_dims": tasks_uniform_and_same_dims,
+        "num_tasks": len(records),
+    }
+    return records, bucket_counts, bucket_counts4, bucket_counts8, bucket_counts4sq, stats
 
 
 def aggregate_bucket_metrics(records: List[TaskSummary]) -> Dict[Tuple[int, int], Dict]:
@@ -434,7 +483,10 @@ def write_task_csv(records: List[TaskSummary], out_path: Path):
             "area", "bucket_area", "overhead", "fill_deficit",
             "Wb4", "Hb4", "bucket_area4", "overhead4",
             "Wb8", "Hb8", "bucket_area8", "overhead8",
-            "Wb4sq", "Hb4sq", "bucket_area4sq", "overhead4sq"
+            "Wb4sq", "Hb4sq", "bucket_area4sq", "overhead4sq",
+            # NEW:
+            "inputs_unique_sizes", "outputs_unique_sizes",
+            "inputs_uniform", "outputs_uniform",
         ])
         for r in records:
             w.writerow([
@@ -454,7 +506,8 @@ def write_task_csv(records: List[TaskSummary], out_path: Path):
                 f"{r.overhead8:.6f}",
                 r.Wb4sq, r.Hb4sq,
                 r.b_area4sq,
-                f"{r.overhead4sq:.6f}"
+                f"{r.overhead4sq:.6f}",
+                r.inputs_unique, r.outputs_unique, int(r.inputs_uniform), int(r.outputs_uniform)
             ])
 
 
@@ -524,7 +577,7 @@ def main():
     H_T = parse_targets(args.h_targets, [4,6,8,10,12,15,20,24,30])
     cap = None if args.cap and args.cap <= 0 else args.cap
 
-    records, bucket_counts, bucket_counts4, bucket_counts8, bucket_counts4sq = summarize_tasks(root, cap, W_T, H_T, args.canonicalize)
+    records, bucket_counts, bucket_counts4, bucket_counts8, bucket_counts4sq, stats = summarize_tasks(root, cap, W_T, H_T, args.canonicalize)
     total = len(records)
     if total == 0:
         print("No valid tasks found.")
@@ -543,6 +596,22 @@ def main():
     print()
 
     print_aspect_breakdown(records)
+    print()
+
+    # --- NEW: size-equality and uniformity summary ---
+    pe, pt = stats["pair_equal"], stats["pair_total"]
+    pairs_pct = (100.0 * pe / pt) if pt else 0.0
+    print(f"Grid pairs with SAME input/output size: {pe} / {pt}  ({pairs_pct:.2f}%)")
+    print("  (Pairs counted only when BOTH input and output exist; test pairs without outputs are skipped.)")
+
+    nt = stats["num_tasks"]
+    tiu, tou = stats["tasks_inputs_uniform"], stats["tasks_outputs_uniform"]
+    tbu = stats["tasks_both_uniform"]
+    tsame = stats["tasks_uniform_and_same_dims"]
+    print(f"Tasks with uniform INPUT sizes:  {tiu} / {nt}  ({(100.0*tiu/nt):.2f}%)")
+    print(f"Tasks with uniform OUTPUT sizes: {tou} / {nt}  ({(100.0*tou/nt):.2f}%)")
+    print(f"Tasks uniform on BOTH:           {tbu} / {nt}  ({(100.0*tbu/nt):.2f}%)")
+    print(f"  …and with SAME uniform input/output size: {tsame} / {nt}  ({(100.0*tsame/nt):.2f}%)")
     print()
 
     # Quick bucket orientation summary
