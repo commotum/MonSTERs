@@ -11,7 +11,7 @@ hydra:
 data_path: data/arc-aug-1000
 
 # Hyperparams - Training
-global_batch_size: 64
+global_batch_size: 96
 
 epochs: 20000
 eval_interval: 500
