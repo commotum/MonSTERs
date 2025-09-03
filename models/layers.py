@@ -76,8 +76,9 @@ class MonsterEmbedding(nn.Module):
         self.max_time_idx = int(max_time_steps) + 1 # include t=0
 
         if self.num_freq == 0:
-            self.ch_table = nn.Buffer(torch.empty(0, 0), persistent=False)
-            self.sh_table = nn.Buffer(torch.empty(0, 0), persistent=False)
+            empty = torch.empty(self.max_time_idx, self.max_pos, 0, device=device)
+            self.ch_table = nn.Buffer(empty, persistent=False)
+            self.sh_table = nn.Buffer(empty.clone(), persistent=False)
             self.cx = nn.Buffer(torch.empty(0, 0), persistent=False)
             self.sx = nn.Buffer(torch.empty(0, 0), persistent=False)
             self.cy = nn.Buffer(torch.empty(0, 0), persistent=False)
@@ -142,11 +143,16 @@ class MonsterEmbedding(nn.Module):
         self.sz = nn.Buffer(sz, persistent=False)
 
         # Temporal components ------------------------------------------------
-        t_idx = torch.arange(self.max_time_idx, dtype=torch.float32, device=device)
-        t = t_idx * 0.25
-        phi = (t * self.unit).unsqueeze(-1) * inv_freq
+        t_idx = torch.arange(self.max_time_idx, dtype=torch.float32, device=device) * 0.25
+        phi = t_idx[:, None, None] * self.unit * inv_freq[None, None, :]
+        phi = torch.broadcast_to(phi, (self.max_time_idx, self.max_pos, self.num_freq))
         ch = torch.cosh(phi)
         sh = torch.sinh(phi)
+
+        if self.skip_prefix and self.prefix_len > 0:
+            k = min(self.prefix_len, self.max_pos)
+            ch[:, :k] = 1.0
+            sh[:, :k] = 0.0
 
         self.ch_table = nn.Buffer(ch, persistent=False)
         self.sh_table = nn.Buffer(sh, persistent=False)
@@ -162,18 +168,10 @@ class MonsterEmbedding(nn.Module):
 
         time_idx = time_idx.clamp_max(self.max_time_idx - 1)
 
-        ch = self.ch_table[time_idx].expand(self.max_pos, -1).clone()
-        sh = self.sh_table[time_idx].expand(self.max_pos, -1).clone()
-
-        if self.skip_prefix and self.prefix_len > 0:
-            k = min(self.prefix_len, self.max_pos)
-            ch[:k] = 1.0
-            sh[:k] = 0.0
-
         return {
             "kind": "monster",
-            "ch": ch,
-            "sh": sh,
+            "ch": self.ch_table[time_idx],
+            "sh": self.sh_table[time_idx],
             "cx": self.cx,
             "sx": self.sx,
             "cy": self.cy,
