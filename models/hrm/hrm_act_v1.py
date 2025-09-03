@@ -152,6 +152,7 @@ class HierarchicalReasoningModel_ACTV1_Inner(nn.Module):
                 prefix_len=self.puzzle_emb_len,
                 use_xy=self.config.monster_use_xy,
                 grid_w=self.config.monster_grid_w,
+                max_time_steps=self.config.halt_max_steps * self.config.H_cycles * self.config.L_cycles,
             )
         else:
             raise NotImplementedError()
@@ -204,30 +205,38 @@ class HierarchicalReasoningModel_ACTV1_Inner(nn.Module):
             z_L=torch.where(reset_flag.view(-1, 1, 1), self.L_init, carry.z_L),
         )
 
-    def forward(self, carry: HierarchicalReasoningModel_ACTV1InnerCarry, batch: Dict[str, torch.Tensor]) -> Tuple[HierarchicalReasoningModel_ACTV1InnerCarry, torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        pos_obj = None
+    def forward(
+        self,
+        carry: HierarchicalReasoningModel_ACTV1InnerCarry,
+        batch: Dict[str, torch.Tensor],
+        start_step: torch.Tensor,
+    ) -> Tuple[HierarchicalReasoningModel_ACTV1InnerCarry, torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        pos_obj_fixed = None
         if hasattr(self, "rotary_emb"):
-            pos_obj = self.rotary_emb()
+            pos_obj_fixed = self.rotary_emb()
             if (
                 self.config.pos_encodings == "rope"
                 and self.config.skip_prefix
                 and self.puzzle_emb_len > 0
             ):
-                cos, sin = pos_obj
+                cos, sin = pos_obj_fixed
                 cos = cos.clone()
                 sin = sin.clone()
                 k = int(self.puzzle_emb_len)
                 cos[:k].fill_(1.0)
                 sin[:k].zero_()
-                pos_obj = (cos, sin)
-        elif hasattr(self, "monster_emb"):
-            pos_obj = self.monster_emb()
-
-        seq_info = dict(cos_sin=pos_obj)
-
+                pos_obj_fixed = (cos, sin)
+        def get_seq_info(t_idx: int):
+            if hasattr(self, "monster_emb"):
+                return dict(cos_sin=self.monster_emb(t_idx))
+            return dict(cos_sin=pos_obj_fixed)
 
         # Input encoding
         input_embeddings = self._input_embeddings(batch["inputs"], batch["puzzle_identifiers"])
+
+        # Starting time index (quarter steps)
+        start_step_int = int(start_step[0].item())
+        time_idx = start_step_int * self.config.H_cycles * self.config.L_cycles
 
         # Forward iterations
         with torch.no_grad():
@@ -235,17 +244,21 @@ class HierarchicalReasoningModel_ACTV1_Inner(nn.Module):
 
             for _H_step in range(self.config.H_cycles):
                 for _L_step in range(self.config.L_cycles):
-                    if not ((_H_step == self.config.H_cycles - 1) and (_L_step == self.config.L_cycles - 1)):
-                        z_L = self.L_level(z_L, z_H + input_embeddings, **seq_info)
+                    time_idx += 1
+                    if not (
+                        (_H_step == self.config.H_cycles - 1)
+                        and (_L_step == self.config.L_cycles - 1)
+                    ):
+                        z_L = self.L_level(z_L, z_H + input_embeddings, **get_seq_info(time_idx))
 
                 if not (_H_step == self.config.H_cycles - 1):
-                    z_H = self.H_level(z_H, z_L, **seq_info)
+                    z_H = self.H_level(z_H, z_L, **get_seq_info(time_idx))
 
         assert not z_H.requires_grad and not z_L.requires_grad
 
         # 1-step grad
-        z_L = self.L_level(z_L, z_H + input_embeddings, **seq_info)
-        z_H = self.H_level(z_H, z_L, **seq_info)
+        z_L = self.L_level(z_L, z_H + input_embeddings, **get_seq_info(time_idx))
+        z_H = self.H_level(z_H, z_L, **get_seq_info(time_idx))
 
         # LM Outputs
         new_carry = HierarchicalReasoningModel_ACTV1InnerCarry(z_H=z_H.detach(), z_L=z_L.detach())  # New carry no grad
@@ -290,7 +303,9 @@ class HierarchicalReasoningModel_ACTV1(nn.Module):
         new_current_data = {k: torch.where(carry.halted.view((-1, ) + (1, ) * (batch[k].ndim - 1)), batch[k], v) for k, v in carry.current_data.items()}
 
         # Forward inner model
-        new_inner_carry, logits, (q_halt_logits, q_continue_logits) = self.inner(new_inner_carry, new_current_data)
+        new_inner_carry, logits, (q_halt_logits, q_continue_logits) = self.inner(
+            new_inner_carry, new_current_data, new_steps
+        )
 
         outputs = {
             "logits": logits,
@@ -320,7 +335,7 @@ class HierarchicalReasoningModel_ACTV1(nn.Module):
                 # NOTE: No replay buffer and target networks for computing target Q-value.
                 # As batch_size is large, there're many parallel envs.
                 # Similar concept as PQN https://arxiv.org/abs/2407.04811
-                next_q_halt_logits, next_q_continue_logits = self.inner(new_inner_carry, new_current_data)[-1]
+                next_q_halt_logits, next_q_continue_logits = self.inner(new_inner_carry, new_current_data, new_steps)[-1]
                 
                 outputs["target_q_continue"] = torch.sigmoid(torch.where(is_last_step, next_q_halt_logits, torch.maximum(next_q_halt_logits, next_q_continue_logits)))
 
