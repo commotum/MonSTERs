@@ -1,4 +1,4 @@
-from typing import Tuple, Dict
+from typing import Tuple, Dict, Union
 
 import torch
 from torch import nn
@@ -151,13 +151,16 @@ class MonsterEmbedding(nn.Module):
         self.ch_table = nn.Buffer(ch, persistent=False)
         self.sh_table = nn.Buffer(sh, persistent=False)
 
-    def forward(self, time_idx: int) -> Dict[str, torch.Tensor]:
+    def forward(self, time_idx: Union[int, torch.Tensor]) -> Dict[str, torch.Tensor]:
         if self.num_freq == 0:
             return {"kind": "monster", "num_freq": 0}
 
-        time_idx = int(time_idx)
-        if time_idx >= self.max_time_idx:
-            time_idx = self.max_time_idx - 1
+        if not torch.is_tensor(time_idx):
+            time_idx = torch.tensor(time_idx, dtype=torch.int64, device=self.ch_table.device)
+        else:
+            time_idx = time_idx.to(dtype=torch.int64, device=self.ch_table.device)
+
+        time_idx = time_idx.clamp_max(self.max_time_idx - 1)
 
         ch = self.ch_table[time_idx].expand(self.max_pos, -1).clone()
         sh = self.sh_table[time_idx].expand(self.max_pos, -1).clone()

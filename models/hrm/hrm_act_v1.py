@@ -226,7 +226,7 @@ class HierarchicalReasoningModel_ACTV1_Inner(nn.Module):
                 cos[:k].fill_(1.0)
                 sin[:k].zero_()
                 pos_obj_fixed = (cos, sin)
-        def get_seq_info(t_idx: int):
+        def get_seq_info(t_idx: torch.Tensor):
             if hasattr(self, "monster_emb"):
                 return dict(cos_sin=self.monster_emb(t_idx))
             return dict(cos_sin=pos_obj_fixed)
@@ -235,7 +235,7 @@ class HierarchicalReasoningModel_ACTV1_Inner(nn.Module):
         input_embeddings = self._input_embeddings(batch["inputs"], batch["puzzle_identifiers"])
 
         # Starting time index (quarter steps)
-        start_step_int = int(start_step[0].item())
+        start_step_int = start_step.to(torch.int64)[0]
         time_idx = start_step_int * self.config.H_cycles * self.config.L_cycles
 
         # Forward iterations
@@ -244,7 +244,7 @@ class HierarchicalReasoningModel_ACTV1_Inner(nn.Module):
 
             for _H_step in range(self.config.H_cycles):
                 for _L_step in range(self.config.L_cycles):
-                    time_idx += 1
+                    time_idx.add_(1)
                     if not (
                         (_H_step == self.config.H_cycles - 1)
                         and (_L_step == self.config.L_cycles - 1)
