@@ -60,7 +60,7 @@ class HierarchicalReasoningModel_ACTV1Config(BaseModel):
     skip_prefix: bool = True
 
     # Halting Q-learning config
-    halt_max_steps: int = 32
+    halt_max_steps: int = 16
     halt_exploration_prob: float
 
     forward_dtype: str = "bfloat16"
