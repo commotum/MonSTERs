@@ -42,33 +42,9 @@ class ACTLossHead(nn.Module):
         super().__init__()
         self.model = model
         self.loss_fn = globals()[loss_type]
-
+        
     def initial_carry(self, *args, **kwargs):
         return self.model.initial_carry(*args, **kwargs)  # type: ignore
-
-    @torch.no_grad()
-    @torch._dynamo.disable
-    def _compute_metrics(self, new_carry, outputs, labels):
-        mask = labels != IGNORE_LABEL_ID
-        loss_counts = mask.sum(-1)
-        loss_divisor = loss_counts.clamp_min(1).unsqueeze(-1)  # Avoid NaNs in division
-
-        is_correct = mask & (torch.argmax(outputs["logits"], dim=-1) == labels)
-        seq_is_correct = is_correct.sum(-1) == loss_counts
-
-        # Metrics (halted)
-        valid_metrics = new_carry.halted & (loss_counts > 0)
-        metrics = {
-            "count": valid_metrics.sum(),
-
-            "accuracy":       torch.where(valid_metrics, (is_correct.to(torch.float32) / loss_divisor).sum(-1), 0).sum(),
-            "exact_accuracy": (valid_metrics & seq_is_correct).sum(),
-
-            "q_halt_accuracy": (valid_metrics & ((outputs["q_halt_logits"] >= 0) == seq_is_correct)).sum(),
-            "steps":          torch.where(valid_metrics, new_carry.steps, 0).sum(),
-        }
-
-        return loss_divisor, seq_is_correct, metrics
 
     def forward(
         self,
@@ -82,7 +58,25 @@ class ACTLossHead(nn.Module):
         labels = new_carry.current_data["labels"]
 
         # Correctness
-        loss_divisor, seq_is_correct, metrics = self._compute_metrics(new_carry, outputs, labels)
+        with torch.no_grad():
+            mask = labels != IGNORE_LABEL_ID
+            loss_counts = mask.sum(-1)
+            loss_divisor = loss_counts.clamp_min(1).unsqueeze(-1)  # Avoid NaNs in division
+
+            is_correct = mask & (torch.argmax(outputs["logits"], dim=-1) == labels)
+            seq_is_correct = is_correct.sum(-1) == loss_counts
+            
+            # Metrics (halted)
+            valid_metrics = new_carry.halted & (loss_counts > 0)
+            metrics = {
+                "count": valid_metrics.sum(),
+                
+                "accuracy":       torch.where(valid_metrics, (is_correct.to(torch.float32) / loss_divisor).sum(-1), 0).sum(),
+                "exact_accuracy": (valid_metrics & seq_is_correct).sum(),
+
+                "q_halt_accuracy": (valid_metrics & ((outputs["q_halt_logits"] >= 0) == seq_is_correct)).sum(),
+                "steps":          torch.where(valid_metrics, new_carry.steps, 0).sum(),
+            }
 
         # Losses
         # FIXME: Assuming the batch is always full

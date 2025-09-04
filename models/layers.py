@@ -1,4 +1,4 @@
-from typing import Tuple, Dict, Union
+from typing import Tuple, Dict
 
 import torch
 from torch import nn
@@ -58,7 +58,6 @@ class MonsterEmbedding(nn.Module):
         prefix_len: int = 0,
         use_xy: bool = True,
         grid_w: int = 30,
-        max_time_steps: int = 0,
         device=None,
     ):
         super().__init__()
@@ -73,12 +72,10 @@ class MonsterEmbedding(nn.Module):
         self.prefix_len = int(prefix_len)
         self.use_xy = bool(use_xy)
         self.grid_w = int(grid_w)
-        self.max_time_idx = int(max_time_steps) + 1 # include t=0
 
         if self.num_freq == 0:
-            empty = torch.empty(self.max_time_idx, self.max_pos, 0, device=device)
-            self.ch_table = nn.Buffer(empty, persistent=False)
-            self.sh_table = nn.Buffer(empty.clone(), persistent=False)
+            self.ch = nn.Buffer(torch.empty(0, 0), persistent=False)
+            self.sh = nn.Buffer(torch.empty(0, 0), persistent=False)
             self.cx = nn.Buffer(torch.empty(0, 0), persistent=False)
             self.sx = nn.Buffer(torch.empty(0, 0), persistent=False)
             self.cy = nn.Buffer(torch.empty(0, 0), persistent=False)
@@ -90,7 +87,7 @@ class MonsterEmbedding(nn.Module):
         j = torch.arange(self.num_freq, dtype=torch.float32, device=device)
         inv_freq = self.base ** (-j / self.num_freq)
 
-        # Spatial components -------------------------------------------------
+###
         pos = torch.arange(self.max_pos, dtype=torch.float32, device=device)
         if self.use_xy:
             idx = torch.clamp(pos - self.prefix_len, min=0)
@@ -109,16 +106,47 @@ class MonsterEmbedding(nn.Module):
             x = x_idx.to(torch.float32) - half_w       # e.g., 0..29 -> -14.5..+14.5
             y = half_h - y_idx.to(torch.float32)       # top row -> +14.5, bottom -> -14.5
 
-            z = torch.remainder(x, 2.0) + torch.remainder(y, 2.0) # Sudoku heuristic
+            z = torch.remainder(x, 2.0) + torch.remainder(y, 2.0) # worked for sudoku, maybe it'll work here as well?
 
-        x = torch.zeros_like(pos)
-        y = torch.zeros_like(pos)
-        z = torch.zeros_like(pos)
+            # Checkerboard from integer indices (don’t use centered floats for parity)
+            # z = 0.5 - torch.remainder(x_idx + y_idx, 2).to(torch.float32)
 
+
+        else:
+            x = torch.zeros_like(pos)
+            y = torch.zeros_like(pos)
+            z = torch.zeros_like(pos)
+
+        t = torch.zeros_like(pos)
+
+###
+        """
+        pos = torch.arange(self.max_pos, dtype=torch.float32, device=device)
+        if self.use_xy:
+            idx = torch.clamp(pos - self.prefix_len, min=0)
+            y = (idx // self.grid_w).to(torch.float32)
+            x = (idx % self.grid_w).to(torch.float32)
+            z = torch.remainder(x + y, 2.0)  # Checkerboard, For ARC-AGI
+            # z = torch.remainder(x, 2.0) + torch.remainder(y, 2.0) # For Sudoku (Worked)
+            # sub_grid = int(self.grid_w ** 0.5) 
+            # z = torch.floor(x / sub_grid) + torch.floor(y / sub_grid) * sub_grid # For Sudoku (Didn't work)
+        
+        else:
+            x = torch.zeros_like(pos)
+            y = torch.zeros_like(pos)
+            z = torch.zeros_like(pos)
+
+        t = torch.zeros_like(pos)
+        """
+###
+
+        phi = (t * self.unit).unsqueeze(-1) * inv_freq
         thx = (x * self.unit).unsqueeze(-1) * inv_freq
         thy = (y * self.unit).unsqueeze(-1) * inv_freq
         thz = (z * self.unit).unsqueeze(-1) * inv_freq
 
+        ch = torch.cosh(phi)
+        sh = torch.sinh(phi)
         cx = torch.cos(thx)
         sx = torch.sin(thx)
         cy = torch.cos(thy)
@@ -128,6 +156,8 @@ class MonsterEmbedding(nn.Module):
 
         if self.skip_prefix and self.prefix_len > 0:
             k = min(self.prefix_len, self.max_pos)
+            ch[:k] = 1.0
+            sh[:k] = 0.0
             cx[:k] = 1.0
             sx[:k] = 0.0
             cy[:k] = 1.0
@@ -135,6 +165,8 @@ class MonsterEmbedding(nn.Module):
             cz[:k] = 1.0
             sz[:k] = 0.0
 
+        self.ch = nn.Buffer(ch, persistent=False)
+        self.sh = nn.Buffer(sh, persistent=False)
         self.cx = nn.Buffer(cx, persistent=False)
         self.sx = nn.Buffer(sx, persistent=False)
         self.cy = nn.Buffer(cy, persistent=False)
@@ -142,36 +174,13 @@ class MonsterEmbedding(nn.Module):
         self.cz = nn.Buffer(cz, persistent=False)
         self.sz = nn.Buffer(sz, persistent=False)
 
-        # Temporal components ------------------------------------------------
-        t_idx = torch.arange(self.max_time_idx, dtype=torch.float32, device=device) * 0.25
-        phi = t_idx[:, None, None] * self.unit * inv_freq[None, None, :]
-        phi = torch.broadcast_to(phi, (self.max_time_idx, self.max_pos, self.num_freq))
-        ch = torch.cosh(phi)
-        sh = torch.sinh(phi)
-
-        if self.skip_prefix and self.prefix_len > 0:
-            k = min(self.prefix_len, self.max_pos)
-            ch[:, :k] = 1.0
-            sh[:, :k] = 0.0
-
-        self.ch_table = nn.Buffer(ch, persistent=False)
-        self.sh_table = nn.Buffer(sh, persistent=False)
-
-    def forward(self, time_idx: Union[int, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    def forward(self) -> Dict[str, torch.Tensor]:
         if self.num_freq == 0:
             return {"kind": "monster", "num_freq": 0}
-
-        if not torch.is_tensor(time_idx):
-            time_idx = torch.tensor(time_idx, dtype=torch.int64, device=self.ch_table.device)
-        else:
-            time_idx = time_idx.to(dtype=torch.int64, device=self.ch_table.device)
-
-        time_idx = time_idx.clamp_max(self.max_time_idx - 1)
-
         return {
             "kind": "monster",
-            "ch": self.ch_table[time_idx],
-            "sh": self.sh_table[time_idx],
+            "ch": self.ch,
+            "sh": self.sh,
             "cx": self.cx,
             "sx": self.sx,
             "cy": self.cy,
