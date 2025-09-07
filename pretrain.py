@@ -5,7 +5,12 @@ import math
 import yaml
 import shutil
 import time
+import signal
+import tempfile
+import subprocess
+import random
 
+import numpy as np
 import torch
 import torch.distributed as dist
 from torch import nn
@@ -69,6 +74,9 @@ class PretrainConfig(pydantic.BaseModel):
     checkpoint_every_eval: bool = False
     eval_interval: Optional[int] = None
     eval_save_outputs: List[str] = []
+    eval: bool = False
+    resume_from: Optional[str] = None
+    checkpoint_interval: Optional[int] = None
 
 
 @dataclass
@@ -80,6 +88,35 @@ class TrainState:
 
     step: int
     total_steps: int
+
+
+def get_rng_state():
+    return {
+        "python": random.getstate(),
+        "numpy": np.random.get_state(),
+        "torch": torch.get_rng_state(),
+        "cuda": torch.cuda.get_rng_state_all(),
+    }
+
+
+def set_rng_state(state):
+    random.setstate(state["python"])
+    np.random.set_state(state["numpy"])
+    torch.set_rng_state(state["torch"])
+    torch.cuda.set_rng_state_all(state["cuda"])
+
+
+def atomic_save(obj, path):
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(path))
+    os.close(tmp_fd)
+    try:
+        torch.save(obj, tmp_path)
+        os.replace(tmp_path, path)
+        # Integrity check
+        torch.load(path)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
 
 def create_dataloader(config: PretrainConfig, split: str, rank: int, world_size: int, **kwargs):
@@ -189,12 +226,60 @@ def init_train_state(config: PretrainConfig, train_metadata: PuzzleDatasetMetada
 
 
 def save_train_state(config: PretrainConfig, train_state: TrainState):
-    # FIXME: Only saved model.
     if config.checkpoint_path is None:
         return
 
     os.makedirs(config.checkpoint_path, exist_ok=True)
-    torch.save(train_state.model.state_dict(), os.path.join(config.checkpoint_path, f"step_{train_state.step}"))
+    git_hash = "unknown"
+    try:
+        git_hash = subprocess.check_output(["git", "rev-parse", "HEAD"]).decode().strip()
+    except Exception:
+        pass
+    ckpt = {
+        "model": train_state.model.state_dict(),
+        "optimizers": [o.state_dict() for o in train_state.optimizers],
+        "step": train_state.step,
+        "total_steps": train_state.total_steps,
+        "optimizer_lrs": train_state.optimizer_lrs,
+        "carry": train_state.carry,
+        "rng_state": get_rng_state(),
+        "config": config.model_dump(),
+        "git_hash": git_hash,
+    }
+    ckpt_file = os.path.join(config.checkpoint_path, "latest.pt")
+    atomic_save(ckpt, ckpt_file)
+
+
+def load_train_state(config: PretrainConfig, train_state: TrainState, train_loader: DataLoader):
+    ckpt_file = config.resume_from
+    if ckpt_file is None and config.checkpoint_path is not None:
+        ckpt_file = os.path.join(config.checkpoint_path, "latest.pt")
+    if ckpt_file is None or not os.path.exists(ckpt_file):
+        return iter(train_loader)
+
+    ckpt = torch.load(ckpt_file, map_location="cpu")
+    train_state.model.load_state_dict(ckpt["model"])
+    for opt, state in zip(train_state.optimizers, ckpt.get("optimizers", [])):
+        opt.load_state_dict(state)
+    train_state.step = ckpt.get("step", 0)
+    train_state.total_steps = ckpt.get("total_steps", train_state.total_steps)
+    train_state.optimizer_lrs = ckpt.get("optimizer_lrs", train_state.optimizer_lrs)
+    train_state.carry = ckpt.get("carry")
+    if "rng_state" in ckpt:
+        set_rng_state(ckpt["rng_state"])
+
+    return skip_batches(train_loader, train_state.step)
+
+
+def skip_batches(loader: DataLoader, num_batches: int):
+    it = iter(loader)
+    for _ in range(num_batches):
+        try:
+            next(it)
+        except StopIteration:
+            it = iter(loader)
+            next(it)
+    return it
 
 
 def compute_lr(base_lr: float, config: PretrainConfig, train_state: TrainState):
@@ -398,20 +483,35 @@ def launch(hydra_config: DictConfig):
 
     # Seed RNGs to ensure consistency
     torch.random.manual_seed(config.seed + RANK)
+    random.seed(config.seed + RANK)
+    np.random.seed(config.seed + RANK)
 
     # Dataset
-    train_epochs_per_iter = config.eval_interval if config.eval_interval is not None else config.epochs
-    total_iters = config.epochs // train_epochs_per_iter
-
-    assert config.epochs % train_epochs_per_iter == 0, "Eval interval must be a divisor of total epochs."
-
-    train_loader, train_metadata = create_dataloader(config, "train", test_set_mode=False, epochs_per_iter=train_epochs_per_iter, global_batch_size=config.global_batch_size, rank=RANK, world_size=WORLD_SIZE)
-    eval_loader,  eval_metadata  = create_dataloader(config, "test", test_set_mode=True, epochs_per_iter=1, global_batch_size=config.global_batch_size, rank=RANK, world_size=WORLD_SIZE)
+    train_loader, train_metadata = create_dataloader(
+        config,
+        "train",
+        test_set_mode=False,
+        epochs_per_iter=config.epochs,
+        global_batch_size=config.global_batch_size,
+        rank=RANK,
+        world_size=WORLD_SIZE,
+    )
+    eval_loader = eval_metadata = None
+    if config.eval:
+        eval_loader, eval_metadata = create_dataloader(
+            config,
+            "test",
+            test_set_mode=True,
+            epochs_per_iter=1,
+            global_batch_size=config.global_batch_size,
+            rank=RANK,
+            world_size=WORLD_SIZE,
+        )
 
     # Train state
     train_state = init_train_state(config, train_metadata, world_size=WORLD_SIZE)
 
-    # Progress bar and logger
+    # Progress bar, logger and signal handlers
     progress_bar = None
     if RANK == 0:
         progress_bar = tqdm.tqdm(total=train_state.total_steps)
@@ -428,29 +528,50 @@ def launch(hydra_config: DictConfig):
         wandb.log({"num_params": sum(x.numel() for x in train_state.model.parameters())}, step=0)
         save_code_and_config(config)
 
+    def handle_signal(signum, frame):
+        if RANK == 0:
+            print(f"Received signal {signum}. Saving checkpoint and exiting.")
+            save_train_state(config, train_state)
+        if dist.is_initialized():
+            dist.barrier()
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGINT, handle_signal)
+    signal.signal(signal.SIGTERM, handle_signal)
+
+    # Resume if checkpoint exists
+    train_iter = load_train_state(config, train_state, train_loader)
+
     # Training Loop
-    for _iter_id in range(total_iters):
-        print (f"[Rank {RANK}, World Size {WORLD_SIZE}]: Epoch {_iter_id * train_epochs_per_iter}")
+    train_state.model.train()
+    while train_state.step < train_state.total_steps:
+        try:
+            set_name, batch, global_batch_size = next(train_iter)
+        except StopIteration:
+            train_iter = iter(train_loader)
+            set_name, batch, global_batch_size = next(train_iter)
 
-        ############ Train Iter
-        train_state.model.train()
-        for set_name, batch, global_batch_size in train_loader:
-            metrics = train_batch(config, train_state, batch, global_batch_size, rank=RANK, world_size=WORLD_SIZE)
-
-            if RANK == 0 and metrics is not None:
-                wandb.log(metrics, step=train_state.step)
-                progress_bar.update(train_state.step - progress_bar.n)  # type: ignore
-
-        ############ Evaluation
-        train_state.model.eval()
-        metrics = evaluate(config, train_state, eval_loader, eval_metadata, rank=RANK, world_size=WORLD_SIZE)
+        metrics = train_batch(config, train_state, batch, global_batch_size, rank=RANK, world_size=WORLD_SIZE)
 
         if RANK == 0 and metrics is not None:
             wandb.log(metrics, step=train_state.step)
-            
-        ############ Checkpointing
-        if RANK == 0 and (config.checkpoint_every_eval or (_iter_id == total_iters - 1)):
+            progress_bar.update(train_state.step - progress_bar.n)  # type: ignore
+
+        if config.eval and config.eval_interval is not None and train_state.step % config.eval_interval == 0:
+            train_state.model.eval()
+            assert eval_loader is not None and eval_metadata is not None
+            eval_metrics = evaluate(config, train_state, eval_loader, eval_metadata, rank=RANK, world_size=WORLD_SIZE)
+            if RANK == 0 and eval_metrics is not None:
+                wandb.log(eval_metrics, step=train_state.step)
+                if config.checkpoint_every_eval:
+                    save_train_state(config, train_state)
+            train_state.model.train()
+
+        if RANK == 0 and config.checkpoint_interval is not None and train_state.step % config.checkpoint_interval == 0:
             save_train_state(config, train_state)
+
+    if RANK == 0:
+        save_train_state(config, train_state)
 
     # finalize
     if dist.is_initialized():
