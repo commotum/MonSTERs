@@ -123,7 +123,7 @@ def atomic_save(obj, path):
         torch.save(obj, tmp_path)
         os.replace(tmp_path, path)
         # Integrity check
-        torch.load(path)
+        torch.load(path, weights_only=False)
     finally:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
@@ -267,7 +267,7 @@ def load_train_state(config: PretrainConfig, train_state: TrainState, train_load
     if ckpt_file is None or not os.path.exists(ckpt_file):
         return iter(train_loader)
 
-    ckpt = torch.load(ckpt_file, map_location="cpu")
+    ckpt = torch.load(ckpt_file, map_location="cpu", weights_only=False)
     train_state.model.load_state_dict(ckpt["model"])
     for opt, state in zip(train_state.optimizers, ckpt.get("optimizers", [])):
         opt.load_state_dict(state)
