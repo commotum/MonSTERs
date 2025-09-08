@@ -62,6 +62,14 @@ wandb login
 
 ## Run Experiments
 
+### Resume training ♻️
+
+If training stops, the script prints where the latest checkpoint was saved. Resume with:
+
+```bash
+python pretrain.py resume_from=checkpoints/<project>/<run_name>/latest.pt <other-args>
+```
+
 ### Quick Demo: Sudoku Solver 💻🗲
 
 Train a master-level Sudoku AI capable of solving extremely difficult puzzles on a modern laptop GPU. 🧩

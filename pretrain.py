@@ -235,9 +235,9 @@ def init_train_state(config: PretrainConfig, train_metadata: PuzzleDatasetMetada
     )
 
 
-def save_train_state(config: PretrainConfig, train_state: TrainState):
+def save_train_state(config: PretrainConfig, train_state: TrainState) -> Optional[str]:
     if config.checkpoint_path is None:
-        return
+        return None
 
     os.makedirs(config.checkpoint_path, exist_ok=True)
     git_hash = "unknown"
@@ -258,6 +258,7 @@ def save_train_state(config: PretrainConfig, train_state: TrainState):
     }
     ckpt_file = os.path.join(config.checkpoint_path, "latest.pt")
     atomic_save(ckpt, ckpt_file)
+    return ckpt_file
 
 
 def load_train_state(config: PretrainConfig, train_state: TrainState, train_loader: DataLoader):
@@ -546,7 +547,9 @@ def launch(hydra_config: DictConfig):
         if RANK == 0:
             print(f"Received signal {signum}. Saving checkpoint and exiting.")
             try:
-                save_train_state(config, train_state)
+                path = save_train_state(config, train_state)
+                if path is not None:
+                    print(f"Checkpoint saved to {path}. Resume with resume_from={path}")
             except Exception as exc:  # noqa: BLE001
                 print(f"Failed to save checkpoint: {exc}")
         if dist.is_initialized():
@@ -591,7 +594,9 @@ def launch(hydra_config: DictConfig):
             save_train_state(config, train_state)
 
     if RANK == 0:
-        save_train_state(config, train_state)
+        path = save_train_state(config, train_state)
+        if path is not None:
+            print(f"Final checkpoint saved to {path}")
 
     # finalize
     if dist.is_initialized():
