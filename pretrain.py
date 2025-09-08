@@ -91,19 +91,29 @@ class TrainState:
 
 
 def get_rng_state():
-    return {
+    state = {
         "python": random.getstate(),
         "numpy": np.random.get_state(),
         "torch": torch.get_rng_state(),
-        "cuda": torch.cuda.get_rng_state_all(),
     }
+    if torch.cuda.is_available():
+        try:
+            state["cuda"] = torch.cuda.get_rng_state_all()
+        except RuntimeError:
+            pass
+    return state
 
 
 def set_rng_state(state):
     random.setstate(state["python"])
     np.random.set_state(state["numpy"])
     torch.set_rng_state(state["torch"])
-    torch.cuda.set_rng_state_all(state["cuda"])
+    cuda_state = state.get("cuda")
+    if cuda_state is not None and torch.cuda.is_available():
+        try:
+            torch.cuda.set_rng_state_all(cuda_state)
+        except RuntimeError:
+            pass
 
 
 def atomic_save(obj, path):
@@ -528,12 +538,22 @@ def launch(hydra_config: DictConfig):
         wandb.log({"num_params": sum(x.numel() for x in train_state.model.parameters())}, step=0)
         save_code_and_config(config)
 
+    MAIN_PID = os.getpid()
+
     def handle_signal(signum, frame):
+        if os.getpid() != MAIN_PID:
+            raise SystemExit(0)
         if RANK == 0:
             print(f"Received signal {signum}. Saving checkpoint and exiting.")
-            save_train_state(config, train_state)
+            try:
+                save_train_state(config, train_state)
+            except Exception as exc:  # noqa: BLE001
+                print(f"Failed to save checkpoint: {exc}")
         if dist.is_initialized():
-            dist.barrier()
+            try:
+                dist.barrier()
+            except Exception:  # noqa: BLE001
+                pass
         raise SystemExit(0)
 
     signal.signal(signal.SIGINT, handle_signal)
