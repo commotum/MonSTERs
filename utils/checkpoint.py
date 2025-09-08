@@ -215,19 +215,36 @@ class CheckpointIO:
                 opt_tensor = load_file(os.path.join(base_dir, opt_comp["path"]), device="cpu")
                 with open(os.path.join(base_dir, "optimizer.json"), "r", encoding="utf-8") as f:
                     opt_meta = json.load(f)
-                offset = 0
                 for idx, opt in enumerate(optimizers):
                     meta_state = opt_meta["optimizers"][idx]
                     state: Dict[int, Dict[str, Any]] = {}
                     for key, tensor in opt_tensor.items():
-                        oid, p_id, k = key.split(".")
+                        oid, p_id, k = key.split(".", 2)
                         if int(oid) != idx:
                             continue
                         state.setdefault(int(p_id), {})[k] = tensor
                     for p_id, s in meta_state["state"].items():
-                        state[int(p_id)].update(s)
+                        state.setdefault(int(p_id), {}).update(s)
                     full_state = {"state": state, "param_groups": meta_state["param_groups"]}
                     opt.load_state_dict(full_state)
+                    try:
+                        for group in opt.param_groups:
+                            for p in group["params"]:
+                                st = opt.state.get(p)
+                                if not st:
+                                    continue
+                                dev = p.device
+                                for kk, vv in list(st.items()):
+                                    if torch.is_tensor(vv):
+                                        if vv.device != dev:
+                                            st[kk] = vv.to(device=dev, non_blocking=True)
+                                    elif isinstance(vv, (list, tuple)) and vv and torch.is_tensor(vv[0]):
+                                        st[kk] = type(vv)(t.to(device=dev, non_blocking=True) for t in vv)
+                    except Exception:
+                        if allow_degraded:
+                            missing.append(f"optimizer_device_migration:{idx}")
+                        else:
+                            raise
                     loaded_opts.append(full_state)
             else:
                 missing.append("optimizer")
@@ -239,9 +256,17 @@ class CheckpointIO:
         if rng_comp and rng_comp.get("path"):
             rng_tensors = load_file(os.path.join(base_dir, rng_comp["path"]), device="cpu")
             torch.set_rng_state(rng_tensors["cpu"])
-            cuda_states = [rng_tensors[k] for k in sorted(rng_tensors.keys()) if k.startswith("cuda_")]
-            if cuda_states and torch.cuda.is_available():
-                torch.cuda.set_rng_state_all(cuda_states)
+            cuda_states = []
+            if torch.cuda.is_available():
+                for i in range(torch.cuda.device_count()):
+                    key = f"cuda_{i}"
+                    if key in rng_tensors:
+                        cuda_states.append(rng_tensors[key])
+            if cuda_states:
+                try:
+                    torch.cuda.set_rng_state_all(cuda_states)
+                except RuntimeError:
+                    pass
             with open(os.path.join(base_dir, "rng.json"), "r", encoding="utf-8") as f:
                 rng_meta = json.load(f)
             py_state = rng_meta.get("python")
