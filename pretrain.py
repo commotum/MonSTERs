@@ -6,8 +6,6 @@ import yaml
 import shutil
 import time
 import signal
-import tempfile
-import subprocess
 import random
 
 import numpy as np
@@ -27,6 +25,7 @@ from adam_atan2 import AdamATan2
 from puzzle_dataset import PuzzleDataset, PuzzleDatasetConfig, PuzzleDatasetMetadata
 from utils.functions import load_model_class, get_model_source_path
 from models.sparse_embedding import CastedSparseEmbeddingSignSGD_Distributed
+from utils.checkpoint import CheckpointIO
 
 
 class LossConfig(pydantic.BaseModel):
@@ -75,8 +74,9 @@ class PretrainConfig(pydantic.BaseModel):
     eval_interval: Optional[int] = None
     eval_save_outputs: List[str] = []
     eval: bool = False
-    resume_from: Optional[str] = None
     checkpoint_interval: Optional[int] = None
+    resume: str = "auto"
+    allow_degraded: bool = True
 
 
 @dataclass
@@ -90,43 +90,6 @@ class TrainState:
     total_steps: int
 
 
-def get_rng_state():
-    state = {
-        "python": random.getstate(),
-        "numpy": np.random.get_state(),
-        "torch": torch.get_rng_state(),
-    }
-    if torch.cuda.is_available():
-        try:
-            state["cuda"] = torch.cuda.get_rng_state_all()
-        except RuntimeError:
-            pass
-    return state
-
-
-def set_rng_state(state):
-    random.setstate(state["python"])
-    np.random.set_state(state["numpy"])
-    torch.set_rng_state(state["torch"])
-    cuda_state = state.get("cuda")
-    if cuda_state is not None and torch.cuda.is_available():
-        try:
-            torch.cuda.set_rng_state_all(cuda_state)
-        except RuntimeError:
-            pass
-
-
-def atomic_save(obj, path):
-    tmp_fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(path))
-    os.close(tmp_fd)
-    try:
-        torch.save(obj, tmp_path)
-        os.replace(tmp_path, path)
-        # Integrity check
-        torch.load(path, weights_only=False)
-    finally:
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
 
 
 def create_dataloader(config: PretrainConfig, split: str, rank: int, world_size: int, **kwargs):
@@ -235,49 +198,33 @@ def init_train_state(config: PretrainConfig, train_metadata: PuzzleDatasetMetada
     )
 
 
-def save_train_state(config: PretrainConfig, train_state: TrainState) -> Optional[str]:
+def save_train_state(config: PretrainConfig, train_state: TrainState, ckpt: CheckpointIO) -> Optional[str]:
     if config.checkpoint_path is None:
         return None
 
-    os.makedirs(config.checkpoint_path, exist_ok=True)
-    git_hash = "unknown"
-    try:
-        git_hash = subprocess.check_output(["git", "rev-parse", "HEAD"]).decode().strip()
-    except Exception:
-        pass
-    ckpt = {
-        "model": train_state.model.state_dict(),
-        "optimizers": [o.state_dict() for o in train_state.optimizers],
-        "step": train_state.step,
+    extra = {
         "total_steps": train_state.total_steps,
         "optimizer_lrs": train_state.optimizer_lrs,
-        "carry": train_state.carry,
-        "rng_state": get_rng_state(),
-        "config": config.model_dump(),
-        "git_hash": git_hash,
     }
-    ckpt_file = os.path.join(config.checkpoint_path, "latest.pt")
-    atomic_save(ckpt, ckpt_file)
-    return ckpt_file
+
+    return ckpt.save(model=train_state.model, optimizers=train_state.optimizers, step=train_state.step, extra=extra)
 
 
-def load_train_state(config: PretrainConfig, train_state: TrainState, train_loader: DataLoader):
-    ckpt_file = config.resume_from
-    if ckpt_file is None and config.checkpoint_path is not None:
-        ckpt_file = os.path.join(config.checkpoint_path, "latest.pt")
-    if ckpt_file is None or not os.path.exists(ckpt_file):
+def load_train_state(config: PretrainConfig, train_state: TrainState, train_loader: DataLoader, ckpt: CheckpointIO):
+    target = None
+    if config.resume not in ("auto", "none"):
+        target = ckpt.resolve_path_or_none(config.resume)
+    elif config.resume == "auto":
+        target = ckpt.resolve_latest_or_none()
+
+    if config.resume == "none" or target is None:
         return iter(train_loader)
 
-    ckpt = torch.load(ckpt_file, map_location="cpu", weights_only=False)
-    train_state.model.load_state_dict(ckpt["model"])
-    for opt, state in zip(train_state.optimizers, ckpt.get("optimizers", [])):
-        opt.load_state_dict(state)
-    train_state.step = ckpt.get("step", 0)
-    train_state.total_steps = ckpt.get("total_steps", train_state.total_steps)
-    train_state.optimizer_lrs = ckpt.get("optimizer_lrs", train_state.optimizer_lrs)
-    train_state.carry = ckpt.get("carry")
-    if "rng_state" in ckpt:
-        set_rng_state(ckpt["rng_state"])
+    info = ckpt.load(target, train_state.model, map_location="cpu", optimizers=train_state.optimizers, allow_degraded=config.allow_degraded)
+    train_state.step = info.get("step", 0)
+    extra = info.get("extra", {})
+    train_state.total_steps = extra.get("total_steps", train_state.total_steps)
+    train_state.optimizer_lrs = extra.get("optimizer_lrs", train_state.optimizer_lrs)
 
     return skip_batches(train_loader, train_state.step)
 
@@ -521,6 +468,7 @@ def launch(hydra_config: DictConfig):
 
     # Train state
     train_state = init_train_state(config, train_metadata, world_size=WORLD_SIZE)
+    ckpt_io = CheckpointIO(config.checkpoint_path) if config.checkpoint_path is not None else CheckpointIO("checkpoints")
 
     # Progress bar, logger and signal handlers
     progress_bar = None
@@ -547,9 +495,9 @@ def launch(hydra_config: DictConfig):
         if RANK == 0:
             print(f"Received signal {signum}. Saving checkpoint and exiting.")
             try:
-                path = save_train_state(config, train_state)
+                path = save_train_state(config, train_state, ckpt_io)
                 if path is not None:
-                    print(f"Checkpoint saved to {path}. Resume with resume_from={path}")
+                    print(f"Checkpoint saved to {path}")
             except Exception as exc:  # noqa: BLE001
                 print(f"Failed to save checkpoint: {exc}")
         if dist.is_initialized():
@@ -563,7 +511,7 @@ def launch(hydra_config: DictConfig):
     signal.signal(signal.SIGTERM, handle_signal)
 
     # Resume if checkpoint exists
-    train_iter = load_train_state(config, train_state, train_loader)
+    train_iter = load_train_state(config, train_state, train_loader, ckpt_io)
 
     # Training Loop
     train_state.model.train()
@@ -587,14 +535,14 @@ def launch(hydra_config: DictConfig):
             if RANK == 0 and eval_metrics is not None:
                 wandb.log(eval_metrics, step=train_state.step)
                 if config.checkpoint_every_eval:
-                    save_train_state(config, train_state)
+                    save_train_state(config, train_state, ckpt_io)
             train_state.model.train()
 
         if RANK == 0 and config.checkpoint_interval is not None and train_state.step % config.checkpoint_interval == 0:
-            save_train_state(config, train_state)
+            save_train_state(config, train_state, ckpt_io)
 
     if RANK == 0:
-        path = save_train_state(config, train_state)
+        path = save_train_state(config, train_state, ckpt_io)
         if path is not None:
             print(f"Final checkpoint saved to {path}")
 

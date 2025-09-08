@@ -17,8 +17,9 @@ epochs: 20000
 eval_interval: 500
 checkpoint_every_eval: True
 eval: false
-resume_from: null
 checkpoint_interval: null
+resume: auto
+allow_degraded: true
 
 lr: 1e-4
 lr_min_ratio: 1.0

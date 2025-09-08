@@ -64,11 +64,13 @@ wandb login
 
 ### Resume training ♻️
 
-If training stops, the script prints where the latest checkpoint was saved. Resume with:
+If training stops, the script prints where the latest checkpoint was saved. Resume with the new `resume` flag:
 
 ```bash
-python pretrain.py resume_from=checkpoints/<project>/<run_name>/latest.pt <other-args>
+python pretrain.py resume=checkpoints/<project>/<run_name>/sft-v1/<timestamp>_stepXXXXXX/manifest.json <other-args>
 ```
+
+To force a fresh start even if checkpoints exist, use `resume=none`.
 
 ### Quick Demo: Sudoku Solver 💻🗲
 
