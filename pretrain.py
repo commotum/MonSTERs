@@ -77,6 +77,9 @@ class PretrainConfig(pydantic.BaseModel):
     checkpoint_interval: Optional[int] = None
     resume: str = "auto"
     allow_degraded: bool = True
+    # If True, advance dataloader by prior step count to ensure identical batches.
+    # If False, resume immediately from next batch (faster but not bitwise-deterministic).
+    deterministic_resume: bool = True
 
 
 @dataclass
@@ -226,6 +229,15 @@ def load_train_state(config: PretrainConfig, train_state: TrainState, train_load
     train_state.total_steps = extra.get("total_steps", train_state.total_steps)
     train_state.optimizer_lrs = extra.get("optimizer_lrs", train_state.optimizer_lrs)
 
+    if not config.deterministic_resume:
+        # Fast resume: do not consume past batches; accept non-identical continuation.
+        if os.environ.get("RANK", "0") == "0":
+            print(f"Fast resume enabled: skipping skip_batches for step {train_state.step}")
+        return iter(train_loader)
+
+    # Deterministic resume: consume prior batches to align dataset RNG sequence
+    if os.environ.get("RANK", "0") == "0":
+        print(f"Deterministic resume: skipping {train_state.step} batches to align stream…")
     return skip_batches(train_loader, train_state.step)
 
 

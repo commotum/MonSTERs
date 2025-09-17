@@ -72,6 +72,11 @@ python pretrain.py resume=checkpoints/<project>/<run_name>/sft-v1/<timestamp>_st
 
 To force a fresh start even if checkpoints exist, use `resume=none`.
 
+Notes on resuming deterministically vs. quickly:
+
+- By default, the loader replays previously seen batches to ensure the exact same data order (`deterministic_resume=true`). For very large step counts, this can take a while.
+- To resume immediately without replaying old batches, add `deterministic_resume=false` to your command.
+
 ### Quick Demo: Sudoku Solver 💻🗲
 
 Train a master-level Sudoku AI capable of solving extremely difficult puzzles on a modern laptop GPU. 🧩

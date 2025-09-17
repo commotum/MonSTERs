@@ -20,6 +20,7 @@ eval: false
 checkpoint_interval: null
 resume: auto
 allow_degraded: true
+deterministic_resume: true
 
 lr: 1e-4
 lr_min_ratio: 1.0
