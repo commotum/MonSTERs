@@ -154,25 +154,71 @@ class CheckpointIO:
         if self.sync_dir_fsync:
             _fsync_dir(self.run_dir)
 
-        # Update pointers
-        if os.path.exists(self.latest_pointer):
-            data = open(self.latest_pointer, "rb").read()
-            self._write_atomic(self.lkg_pointer, data)
-        self._write_atomic(self.latest_pointer, json.dumps({"manifest": os.path.join(step_dir, "manifest.json")}).encode("utf-8"))
+        # Update pointers (only after verifying the new checkpoint exists)
+        new_manifest_path = os.path.join(step_dir, "manifest.json")
 
-        return os.path.join(step_dir, "manifest.json")
+        def _is_complete_checkpoint(manifest_path: str) -> bool:
+            try:
+                if not os.path.exists(manifest_path):
+                    return False
+                base = os.path.dirname(manifest_path)
+                with open(manifest_path, "r", encoding="utf-8") as f:
+                    m = json.load(f)
+                comps = m.get("components", {})
+                # model and rng must exist; optimizer may be optional
+                model_path = comps.get("model", {}).get("path")
+                rng_path = comps.get("rng", {}).get("path")
+                if not model_path or not rng_path:
+                    return False
+                if not os.path.exists(os.path.join(base, model_path)):
+                    return False
+                if not os.path.exists(os.path.join(base, rng_path)):
+                    return False
+                opt_path = comps.get("optimizer", {}).get("path")
+                if opt_path:
+                    if not os.path.exists(os.path.join(base, opt_path)):
+                        return False
+                    if not os.path.exists(os.path.join(base, "optimizer.json")):
+                        return False
+                # minimal completeness satisfied
+                return True
+            except Exception:
+                return False
+
+        if _is_complete_checkpoint(new_manifest_path):
+            # Move current latest to lkg only if it pointed to a valid manifest
+            try:
+                if os.path.exists(self.latest_pointer):
+                    prev = json.load(open(self.latest_pointer, "r", encoding="utf-8"))
+                    prev_manifest = prev.get("manifest")
+                    if prev_manifest and os.path.exists(prev_manifest):
+                        self._write_atomic(self.lkg_pointer, json.dumps(prev).encode("utf-8"))
+            except Exception:
+                # Best-effort; keep going to update latest
+                pass
+
+            self._write_atomic(self.latest_pointer, json.dumps({"manifest": new_manifest_path}).encode("utf-8"))
+        # If not complete, do not update pointers; caller still receives path
+
+        return new_manifest_path
 
     # ------------------------------------------------------------------
     def resolve_latest_or_none(self) -> Optional[str]:
-        try:
-            with open(self.latest_pointer, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            manifest = data.get("manifest")
-            if manifest and os.path.exists(manifest):
-                return manifest
-        except Exception:
-            return None
-        return None
+        """Return the newest valid manifest path, falling back to LKG if needed."""
+        def _load_pointer(path: str) -> Optional[str]:
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                m = data.get("manifest")
+                return m if (m and os.path.exists(m)) else None
+            except Exception:
+                return None
+
+        manifest = _load_pointer(self.latest_pointer)
+        if manifest:
+            return manifest
+        # Fallback to last known good
+        return _load_pointer(self.lkg_pointer)
 
     def any_checkpoint_exists(self) -> bool:
         return self.resolve_latest_or_none() is not None
