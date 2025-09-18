@@ -87,7 +87,15 @@ def launch():
         RANK = dist.get_rank()
         WORLD_SIZE = dist.get_world_size()
 
-        torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
+        # Validate device availability before setting
+        local_rank = int(os.environ["LOCAL_RANK"])
+        device_count = torch.cuda.device_count()
+        if local_rank >= device_count:
+            raise RuntimeError(
+                f"LOCAL_RANK {local_rank} is >= available CUDA devices ({device_count}). "
+                "Set --nproc-per-node to your GPU count or adjust CUDA_VISIBLE_DEVICES."
+            )
+        torch.cuda.set_device(local_rank)
 
     weights_path, run_root, step_from_path = _resolve_checkpoint_components(eval_cfg.checkpoint)
     if run_root is None:
@@ -150,6 +158,13 @@ def launch():
 
     if metrics is not None:
         print(metrics)
+
+    # Clean up distributed resources if initialized
+    if dist.is_initialized():
+        try:
+            dist.destroy_process_group()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
