@@ -255,3 +255,164 @@
   This plan converts the current dense O(T^2) kernel usage into true selective attention by building and packing “attention threads” so the
   kernel computes only the specified Q×K pairs, with concrete varlen execution via the vendor’s API and code‑level refactors targeted to
   Attention.forward and a dedicated router.
+
+
+  › Follow-up task: I want to implement a REAL compute-saving selective attention / “attention threads” mechanism in HRM (not just masking).
+  Before we design changes, I need a precise map of positional encoding usage in this repo.
+
+  Part A — Positional encoding inventory (prove with code):
+  1) Find EVERY file that uses positional encodings in the HRM model path, especially:
+     - RoPE / rotary embeddings (any variant)
+     - Axial RoPE (if present)
+     - the exact symbols/functions/classes used (e.g., RotaryEmbedding, apply_rotary_pos_emb, MonsterEmbedding, apply_monster_pos_emb, cos/
+  sin caches)
+     - line numbers for (a) definition and (b) where it is called/applied to q/k
+     - whether it is “handwritten” (custom implementation) or imported from an external library
+  3) Separate results into:
+     - “HRM actually uses this at runtime”
+     - “Vendored/External code mentions it but HRM doesn’t use it”
+     (I want to avoid being misled by flash-attn’s internal RotaryEmbedding unless HRM calls that path.)
+
+  Part B — Confirm MonSTERs usage specifically:
+  4) Search for any of:
+     - MonSTER, monster, MonsterEmbedding, apply_monster, monster_grid_w, 4D, Minkowski
+  5) If MonSTERs exists in repo:
+     - list all files that define/implement it
+     - list all files that instantiate it
+     - list all files that pass config params into it (grid_w, skip_prefix, etc.)
+     If MonSTERs does NOT exist in repo:
+     - explicitly say “no MonSTERs implementation found” and show the closest-related references (docs, notes, TODOs).
+
+  Part C — Output format requirements:
+  6) Output a concise report:
+     - Section 1: RoPE (HRM runtime) — bullet list of files + what they do + line ranges
+     - Section 2: MonSTERs (HRM runtime) — same
+     - Section 3: Other positional encoders / learned embeddings — same
+     - Section 4: Vendored/External mentions not used by HRM — same
+  7) Do not hand-wave. Every claim needs path + line numbers.
+  8) If your results differ from my previous notes (e.g., you find more files or fewer files than earlier), explain why (e.g., multiple HRM
+  variants, different config path, dead code, tests only).
+
+  Search hints (use whatever tooling you have):
+  - Regex: \b(RoPE|rope|rotary|RotaryEmbedding|apply_rotary|rotary_emb|rope_cache|pos_enc|pos_encodings|position|positional)\b
+  - Regex: \b(MonSTER|monster|MonsterEmbedding|apply_monster|monster_grid_w)\b
+  - Also scan YAML/JSON configs for “pos_encodings: rope|monster|axial|learned” and any dataset metadata that affects sequence length or
+  prefix lengths.
+
+  Deliverable: the file list + what each file contributes (definition vs instantiation vs application) with line numbers.
+
+
+• Explored
+  └ Read layers.py, hrm_act_v1.py, hrm_v1.yaml, pretrain.py, mha.py, flash_attn_interface.py
+    Search pos_encodings|position|positional encoding|RotaryEmbedding|MonsterEmbedding|apply_monster|apply_rotary in **
+
+─ Worked for 1m 04s ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Baseline: What HRM Does Today
+
+  - models/layers.py:362
+      - Calls dense FlashAttention: flash_attn_func(q=query, k=key, v=value, causal=self.causal). Q/K/V have shapes [B, T, H, D] (Q) and [B,
+        T, H_k, D] (K/V) from lines models/layers.py:347–350. No token selection is performed before the call; only positional transforms to
+        q/k (RoPE or MonSTERs) and a per‑channel mask on k are applied (see Section 1/2 below). This is dense O(T^2) attention per head.
+
+  Section 1: RoPE (HRM runtime)
+
+  - Definition (handwritten)
+      - models/layers.py:30–40
+          - Symbol: apply_rotary_pos_emb(q, k, cos, sin) (elementwise apply to q/k).
+      - models/layers.py:299–314
+          - Symbol: class RotaryEmbedding(nn.Module); builds self.cos_cached/self.sin_cached tables sized [T, head_dim].
+  - Instantiation and cache creation
+      - models/hrm/hrm_act_v1.py:132–137
+          - Instantiates self.rotary_emb = RotaryEmbedding(dim=hidden_size // num_heads, max_position_embeddings=seq_len + puzzle_emb_len,
+            base=rope_theta).
+  - Prefix neutralization (skip puzzle prefix)
+      - models/hrm/hrm_act_v1.py:209–223
+          - Gets (cos, sin) = self.rotary_emb(), and if pos_encodings=="rope" and skip_prefix true, sets first puzzle_emb_len positions to
+            identity (cos=1, sin=0).
+  - Where applied to q/k
+      - models/layers.py:352–356
+          - In Attention.forward(): detects tuple (cos, sin) and applies apply_rotary_pos_emb to q/k.
+  - Config switch
+      - models/hrm/hrm_act_v1.py:48 (config field pos_encodings: Literal["learned","rope","monster"])
+      - config/arch/hrm_v1.yaml:21–23 (commented options, selects pos_encodings: monster currently)
+  - Seq_len source (affects cache length)
+      - pretrain.py:122–132 (passes seq_len=train_metadata.seq_len into model config)
+      - models/hrm/hrm_act_v1.py:133–137 (uses seq_len + puzzle_emb_len for RoPE table length)
+
+  Section 2: MonSTERs (HRM runtime)
+
+  - Definition (handwritten)
+      - models/layers.py:48–190
+          - Symbol: class MonsterEmbedding(nn.Module); precomputes scalar tables ch/sh/cx/sx/cy/sy/cz/sz of shape [T, F] for 12‑channel
+            triads.
+      - models/layers.py:193–259
+          - Symbol: apply_monster_pos_emb(q, k, tables, head_dim); applies boost+rotation per 12‑channel triad; returns transformed q/k.
+  - Instantiation and params
+      - models/hrm/hrm_act_v1.py:145–155
+          - Instantiates self.monster_emb = MonsterEmbedding(head_dim, max_position_embeddings=seq_len+puzzle_emb_len, base=monster_theta,
+            top_delta=monster_top_delta, skip_prefix=skip_prefix, prefix_len=puzzle_emb_len, use_xy=monster_use_xy, grid_w=monster_grid_w).
+  - Where tables are fetched and applied
+      - models/hrm/hrm_act_v1.py:223–226
+          - pos_obj = self.monster_emb(), then seq_info = dict(cos_sin=pos_obj).
+      - models/layers.py:352–359
+          - In Attention.forward(): detects dict with kind=="monster", applies apply_monster_pos_emb, then multiplies key by a Minkowski
+            mask (minkowski_mask) to enforce metric dimensions.
+  - Config fields passed
+      - models/hrm/hrm_act_v1.py:53–57 (monster_theta, monster_top_delta, monster_use_xy, monster_grid_w)
+      - models/hrm/hrm_act_v1.py:151–154 (passed into MonsterEmbedding as shown above)
+      - models/hrm/hrm_act_v1.py:59–60 (skip_prefix flag); neutralization of prefix handled at table creation in MonsterEmbedding
+        (skip_prefix/prefix_len).
+
+  Section 3: Other positional encoders / learned embeddings
+
+  - Learned positional embedding
+      - Instantiation: models/hrm/hrm_act_v1.py:138–144
+          - Symbol: self.embed_pos = CastedEmbedding(seq_len + puzzle_emb_len, hidden_size, ...).
+      - Applied: models/hrm/hrm_act_v1.py:187–191
+          - In _input_embeddings(...): adds learned positional embedding to token embedding and scales by 1/sqrt(2).
+  - Puzzle prefix (affects positional scope)
+      - Computation: models/hrm/hrm_act_v1.py:125–131 (computes puzzle_emb_len by ceil‑div of puzzle_emb_ndim over hidden_size)
+      - Prefix neutralization:
+          - RoPE: models/hrm/hrm_act_v1.py:209–223
+          - MonSTERs: handled in MonsterEmbedding (skip_prefix, prefix_len) at table build (see models/layers.py:157–167)
+  - Attention call (no masking, no sparse selection)
+      - models/layers.py:361–368
+          - Symbol: flash_attn_func; dense compute across full [T] length.
+
+  Section 4: Vendored/External mentions not used by HRM
+
+  - flash-attention RotaryEmbedding (not used by HRM)
+      - flash-attention/flash_attn/modules/mha.py:31–33 (imports RotaryEmbedding from flash_attn.layers.rotary)
+      - Same file integrates rotary in its own MHA forward (this module is not called by HRM).
+  - flash-attention interface docs mention rotary and varlen
+      - flash-attention/flash_attn/flash_attn_interface.py:1495–1556 (docstring describing optional rotary_cos/rotary_sin parameters for KV
+        cache path; HRM does not call this path)
+  - Axial RoPE (not implemented in HRM runtime)
+      - Only in documentation notes: MonSTER/axial.md:1–140; MonSTER/4-Dimension-Attention.md:62–99. No axial code is defined or called in
+        models/*.
+
+  If this differs from earlier notes: consistent with prior findings; there is no axial RoPE code present in runtime. All runtime positional
+  usage is in models/hrm/hrm_act_v1.py and models/layers.py. FlashAttention’s own RotaryEmbedding is vendored but unused by HRM.
+
+  Part B — MonSTERs usage specifically
+
+  - Defines/implements MonSTERs
+      - models/layers.py:48–190 (MonsterEmbedding)
+      - models/layers.py:193–259 (apply_monster_pos_emb)
+  - Instantiates MonSTERs
+      - models/hrm/hrm_act_v1.py:145–155 (self.monster_emb = MonsterEmbedding(...))
+  - Passes config params into it
+      - models/hrm/hrm_act_v1.py:53–57 (monster_* config fields)
+      - models/hrm/hrm_act_v1.py:151–154 (skip_prefix, prefix_len, use_xy, grid_w passed)
+  - Uses output at runtime
+      - models/hrm/hrm_act_v1.py:223–226 (pos_obj = self.monster_emb(); packed into seq_info)
+      - models/layers.py:357–359 (apply_monster_pos_emb + Minkowski mask)
+  - No MonSTERs implementation elsewhere needed/used at runtime; MonSTER docs in MonSTER/* are analysis/specs, not linked to runtime model.
+
+  Why these files matter for compute-saving threads
+
+  - All positional encoding is applied to q/k inside Attention.forward before the dense FlashAttention call (models/layers.py:352–359).
+    To implement compute‑saving attention threads, you will add a router (build Q/K subsets) and replace the single dense call at models/
+    layers.py:362 with a varlen/packed call over selected edges. Positional encoders remain unchanged and continue to produce per‑token
+    transforms; they don’t block sparsification.
