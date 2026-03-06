@@ -15,10 +15,15 @@ from common import PuzzleDatasetMetadata, dihedral_transform
 
 cli = ArgParser()
 
+DEFAULT_ARC1_DATASET_DIRS = [
+    "/home/jake/Developer/MonSTERs/dataset/raw-data/ARC-AGI/data",
+    "/home/jake/Developer/MonSTERs/dataset/raw-data/ConceptARC/corpus",
+]
+
 
 class DataProcessConfig(BaseModel):
     # ARC-1
-    dataset_dirs: List[str] = ["/home/jake/Developer/MonSTERs/dataset/raw-data/ARC-AGI/data", "/home/jake/Developer/MonSTERs/dataset/raw-data/ConceptARC/corpus"]
+    dataset_dirs: Optional[List[str]] = None
     output_dir: str = "data/arc-aug-1000"
     
     # ARC-2
@@ -31,6 +36,9 @@ class DataProcessConfig(BaseModel):
 
     seed: int = 42
     num_aug: int = 1000
+    translate_train: bool = True
+    subsample_training_puzzles: Optional[int] = None
+    subsample_evaluation_puzzles: Optional[int] = None
     
     
 ARCMaxGridSize = 30
@@ -149,6 +157,20 @@ def convert_single_arc_puzzle(results: dict, default_name: str, puzzle: dict, au
         results[dest_split][dest_set].append([converted[dest] for converted in group])
 
 
+def maybe_subsample_puzzles(subdir_name: str, puzzles: List[Tuple[str, dict]], config: DataProcessConfig):
+    if subdir_name == "training":
+        limit = config.subsample_training_puzzles
+    elif subdir_name == "evaluation":
+        limit = config.subsample_evaluation_puzzles
+    else:
+        limit = None
+
+    if limit is None or limit >= len(puzzles):
+        return puzzles
+
+    return puzzles[:limit]
+
+
 def load_puzzles_arcagi(results: dict, dataset_path: str, config: DataProcessConfig):
     train_examples_dest = ("train", "all")
     test_examples_map = {
@@ -167,6 +189,7 @@ def load_puzzles_arcagi(results: dict, dataset_path: str, config: DataProcessCon
                     
             # Shuffle puzzles
             np.random.shuffle(puzzles)
+            puzzles = maybe_subsample_puzzles(subdir.name, puzzles, config)
             
             # Assign by fraction
             for idx, (default_name, puzzle) in enumerate(puzzles):
@@ -190,7 +213,8 @@ def convert_dataset(config: DataProcessConfig):
     
     # Read dataset
     data = {}
-    for dataset_dir in config.dataset_dirs:
+    dataset_dirs = config.dataset_dirs or DEFAULT_ARC1_DATASET_DIRS
+    for dataset_dir in dataset_dirs:
         load_puzzles_arcagi(data, dataset_dir, config)
     
     # Map global puzzle identifiers
@@ -211,7 +235,7 @@ def convert_dataset(config: DataProcessConfig):
         os.makedirs(os.path.join(config.output_dir, split_name), exist_ok=True)
         
         # Translational augmentations
-        enable_translational_augment = split_name == "train"
+        enable_translational_augment = split_name == "train" and config.translate_train
 
         # Statistics
         total_examples = 0
