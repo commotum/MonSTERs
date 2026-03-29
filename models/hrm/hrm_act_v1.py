@@ -52,7 +52,7 @@ class HierarchicalReasoningModel_ACTV1Config(BaseModel):
 
     # MonSTER params
     monster_theta: float = 10000.0
-    monster_top_delta: int = 30
+    # monster_top_delta: int = 30
     monster_use_xy: bool = True
     monster_grid_w: int = 30
 
@@ -147,7 +147,7 @@ class HierarchicalReasoningModel_ACTV1_Inner(nn.Module):
                 head_dim=self.config.hidden_size // self.config.num_heads,
                 max_position_embeddings=self.config.seq_len + self.puzzle_emb_len,
                 base=self.config.monster_theta,
-                top_delta=self.config.monster_top_delta,
+                # top_delta=self.config.monster_top_delta,
                 skip_prefix=self.config.skip_prefix,
                 prefix_len=self.puzzle_emb_len,
                 use_xy=self.config.monster_use_xy,
