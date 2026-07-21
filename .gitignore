@@ -171,3 +171,4 @@ cython_debug/
 # HRM repository backup files
 MonSTER/hrm-github.txt
 MonSTER/monsters-github.txt
+.DS_Store
